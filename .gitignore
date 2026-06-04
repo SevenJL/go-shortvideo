@@ -6,3 +6,4 @@
 # 运行时上传的数据(保留目录占位文件)
 /data/uploads/*
 !/data/uploads/.gitkeep
+*.DS_Store
