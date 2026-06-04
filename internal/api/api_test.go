@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"shortvideo/internal/auth"
+	"shortvideo/internal/like"
 	"shortvideo/internal/store"
 )
 
@@ -21,7 +22,8 @@ func newTestServer(t *testing.T) (http.Handler, *store.Store) {
 	t.Helper()
 	s := store.New()
 	dir := t.TempDir()
-	return NewRouter(s, dir, testJWTSecret), s
+	likeSvc := like.NewMemLikeService(s)
+	return NewRouter(s, dir, testJWTSecret, likeSvc, nil, nil), s
 }
 
 // do 发送 HTTP 请求到 handler。userID > 0 时设置 X-User-Id 头（开发测试降级通道）。

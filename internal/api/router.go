@@ -4,12 +4,13 @@ import (
 	"net/http"
 
 	"shortvideo/internal/auth"
+	"shortvideo/internal/feed"
 	"shortvideo/internal/store"
 )
 
 // NewRouter 构建并返回 HTTP 路由(基于 Go 1.22+ 的方法 + 路径模式匹配,无需第三方框架)。
-func NewRouter(s *store.Store, uploadDir, jwtSecret string) http.Handler {
-	h := NewHandler(s, uploadDir, jwtSecret)
+func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, fanoutPub FanoutPublisher) http.Handler {
+	h := NewHandler(s, uploadDir, jwtSecret, likeSvc, feedSvc, fanoutPub)
 	jwtAuth := auth.NewJWT(jwtSecret)
 	authMdw := jwtAuth.Middleware
 

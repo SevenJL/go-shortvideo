@@ -13,16 +13,16 @@ func (h *Handler) Like(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "视频 id 非法")
 		return
 	}
-	changed, err := h.store.Like(uid, id)
+	changed, err := h.likeSvc.Like(uid, id)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), err.Error())
 		return
 	}
-	v, _ := h.store.GetVideo(id)
+	cnt, _ := h.likeSvc.Count(id)
 	writeOK(w, map[string]interface{}{
-		"changed":    changed, // 是否真正改变了状态(重复点赞为 false)
+		"changed":    changed,
 		"liked":      true,
-		"like_count": v.LikeCount,
+		"like_count": cnt,
 	})
 }
 
@@ -37,15 +37,15 @@ func (h *Handler) Unlike(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "视频 id 非法")
 		return
 	}
-	changed, err := h.store.Unlike(uid, id)
+	changed, err := h.likeSvc.Unlike(uid, id)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), err.Error())
 		return
 	}
-	v, _ := h.store.GetVideo(id)
+	cnt, _ := h.likeSvc.Count(id)
 	writeOK(w, map[string]interface{}{
 		"changed":    changed,
 		"liked":      false,
-		"like_count": v.LikeCount,
+		"like_count": cnt,
 	})
 }

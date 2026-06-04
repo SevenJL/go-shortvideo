@@ -34,6 +34,10 @@ func (h *Handler) PublishVideo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, storeErrStatus(err), err.Error())
 		return
 	}
+	// 投递写扩散任务（fan-out on write）
+	if h.fanoutPub != nil {
+		h.fanoutPub.PublishFanout(uid, v.ID, v.CreatedAt)
+	}
 	writeOK(w, v)
 }
 
@@ -91,7 +95,7 @@ func (h *Handler) writeFeed(w http.ResponseWriter, r *http.Request, videos []mod
 		for i, v := range videos {
 			ids[i] = v.ID
 		}
-		likedMap = h.store.BatchHasLiked(uid, ids)
+		likedMap, _ = h.likeSvc.BatchIsLiked(r.Context(), uid, ids)
 	}
 
 	for _, v := range videos {

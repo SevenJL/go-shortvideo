@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -8,18 +9,61 @@ import (
 	"time"
 
 	"shortvideo/internal/auth"
+	"shortvideo/internal/feed"
+	"shortvideo/internal/like"
 	"shortvideo/internal/store"
 )
 
-// Handler 持有处理请求所需的依赖。
-type Handler struct {
-	store     *store.Store
-	uploadDir string
-	jwtSecret string
+// LikeService 抽象点赞操作，统一 Redis 版(like.Service)和内存版(like.MemLikeService)。
+type LikeService interface {
+	Like(uid, vid int64) (changed bool, err error)
+	Unlike(uid, vid int64) (changed bool, err error)
+	Count(vid int64) (int64, error)
+	BatchIsLiked(ctx context.Context, uid int64, vids []int64) (map[int64]bool, error)
 }
 
-func NewHandler(s *store.Store, uploadDir, jwtSecret string) *Handler {
-	return &Handler{store: s, uploadDir: uploadDir, jwtSecret: jwtSecret}
+// RedisLikeService 是 Redis 版点赞服务（方法签名包含 context，用于适配 api.LikeService）。
+type RedisLikeService struct {
+	svc *like.Service
+}
+
+func NewRedisLikeService(svc *like.Service) *RedisLikeService {
+	return &RedisLikeService{svc: svc}
+}
+
+func (r *RedisLikeService) Like(uid, vid int64) (bool, error) {
+	return r.svc.Like(context.Background(), uid, vid)
+}
+func (r *RedisLikeService) Unlike(uid, vid int64) (bool, error) {
+	return r.svc.Unlike(context.Background(), uid, vid)
+}
+func (r *RedisLikeService) Count(vid int64) (int64, error) {
+	return r.svc.Count(context.Background(), vid)
+}
+func (r *RedisLikeService) BatchIsLiked(ctx context.Context, uid int64, vids []int64) (map[int64]bool, error) {
+	return r.svc.BatchIsLiked(ctx, uid, vids)
+}
+
+// FanoutPublisher 发布视频时投递写扩散任务到 MQ。
+type FanoutPublisher interface {
+	PublishFanout(authorID, videoID, tsMilli int64)
+}
+
+// Handler 持有处理请求所需的依赖。
+type Handler struct {
+	store      *store.Store
+	uploadDir  string
+	jwtSecret  string
+	likeSvc    LikeService
+	feedSvc    *feed.Service
+	fanoutPub  FanoutPublisher
+}
+
+func NewHandler(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, fanoutPub FanoutPublisher) *Handler {
+	return &Handler{
+		store: s, uploadDir: uploadDir, jwtSecret: jwtSecret,
+		likeSvc: likeSvc, feedSvc: feedSvc, fanoutPub: fanoutPub,
+	}
 }
 
 // currentUserID 从请求 context 中解析"当前操作用户"(由 auth.Middleware 注入)。
