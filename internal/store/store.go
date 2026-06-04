@@ -1,0 +1,399 @@
+package store
+
+import (
+	"errors"
+	"sort"
+	"sync"
+	"time"
+
+	"shortvideo/internal/model"
+)
+
+// 业务错误
+var (
+	ErrNotFound = errors.New("资源不存在")
+	ErrInvalid  = errors.New("参数非法")
+)
+
+// Store 是线程安全的内存存储(演示用,进程重启后数据丢失)。
+// 生产环境可把这一层替换为 MySQL + Redis,只要保持方法签名不变,
+// 上层 API 代码无需改动。
+type Store struct {
+	mu sync.RWMutex
+
+	users    map[int64]*model.User
+	videos   map[int64]*model.Video
+	comments map[int64]*model.Comment
+
+	// 点赞按"用户维度"存储:userID -> set(videoID)。
+	// 这样既能 O(1) 判断"我是否点过赞",又天然去重;
+	// 且热门视频的点赞请求会分散到不同用户的 key 上,不形成单点热点
+	// (这正是设计文档里"去重按用户维度"的思路)。
+	userLikes map[int64]map[int64]struct{}
+
+	// 关注关系(双向索引,空间换查询效率)
+	following map[int64]map[int64]struct{} // followerID -> set(followeeID):我关注了谁
+	followers map[int64]map[int64]struct{} // followeeID -> set(followerID):谁关注了我
+
+	// 视频 -> 评论 ID 列表(按发表顺序)
+	videoComments map[int64][]int64
+
+	// 自增 ID(均在写锁内递增)
+	userSeq    int64
+	videoSeq   int64
+	commentSeq int64
+}
+
+// New 创建一个空存储。
+func New() *Store {
+	return &Store{
+		users:         make(map[int64]*model.User),
+		videos:        make(map[int64]*model.Video),
+		comments:      make(map[int64]*model.Comment),
+		userLikes:     make(map[int64]map[int64]struct{}),
+		following:     make(map[int64]map[int64]struct{}),
+		followers:     make(map[int64]map[int64]struct{}),
+		videoComments: make(map[int64][]int64),
+	}
+}
+
+func nowMilli() int64 { return time.Now().UnixMilli() }
+
+// ---------------- 用户 ----------------
+
+// CreateUser 创建用户。
+func (s *Store) CreateUser(username string) (*model.User, error) {
+	if username == "" {
+		return nil, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.userSeq++
+	u := &model.User{ID: s.userSeq, Username: username, CreatedAt: nowMilli()}
+	s.users[u.ID] = u
+	return u, nil
+}
+
+// GetUser 查询用户。
+func (s *Store) GetUser(id int64) (*model.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	u, ok := s.users[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *u
+	return &cp, nil
+}
+
+// FollowStats 返回某用户的关注数与粉丝数。
+func (s *Store) FollowStats(userID int64) (followingCount int, followerCount int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.following[userID]), len(s.followers[userID])
+}
+
+// ---------------- 视频 ----------------
+
+// CreateVideo 发布视频。
+func (s *Store) CreateVideo(authorID int64, title, playURL, coverURL string) (model.Video, error) {
+	if title == "" || playURL == "" {
+		return model.Video{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[authorID]; !ok {
+		return model.Video{}, ErrNotFound
+	}
+	s.videoSeq++
+	v := &model.Video{
+		ID:        s.videoSeq,
+		AuthorID:  authorID,
+		Title:     title,
+		PlayURL:   playURL,
+		CoverURL:  coverURL,
+		CreatedAt: nowMilli(),
+	}
+	s.videos[v.ID] = v
+	return *v, nil
+}
+
+// GetVideo 查询单个视频(返回副本,避免与计数自增产生数据竞争)。
+func (s *Store) GetVideo(id int64) (model.Video, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v, ok := s.videos[id]
+	if !ok {
+		return model.Video{}, ErrNotFound
+	}
+	return *v, nil
+}
+
+// ListVideos 广场流:全部视频按发布时间倒序分页。
+// 由于 ID 单调递增,按 ID 倒序即为按时间倒序。
+// maxID=0 表示从最新开始;否则只返回 ID < maxID 的视频(游标分页)。
+func (s *Store) ListVideos(maxID int64, limit int) []model.Video {
+	limit = clampLimit(limit)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	res := make([]model.Video, 0)
+	for _, v := range s.videos {
+		if maxID > 0 && v.ID >= maxID {
+			continue
+		}
+		res = append(res, *v)
+	}
+	sortByIDDesc(res)
+	return truncate(res, limit)
+}
+
+// ListUserVideos 某用户发布的视频(按时间倒序分页)。
+func (s *Store) ListUserVideos(authorID, maxID int64, limit int) ([]model.Video, error) {
+	limit = clampLimit(limit)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.users[authorID]; !ok {
+		return nil, ErrNotFound
+	}
+	res := make([]model.Video, 0)
+	for _, v := range s.videos {
+		if v.AuthorID != authorID {
+			continue
+		}
+		if maxID > 0 && v.ID >= maxID {
+			continue
+		}
+		res = append(res, *v)
+	}
+	sortByIDDesc(res)
+	return truncate(res, limit), nil
+}
+
+// ---------------- 点赞 ----------------
+
+// Like 点赞(幂等)。changed=true 表示状态确实发生改变。
+func (s *Store) Like(userID, videoID int64) (changed bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[userID]; !ok {
+		return false, ErrNotFound
+	}
+	v, ok := s.videos[videoID]
+	if !ok {
+		return false, ErrNotFound
+	}
+	set := s.userLikes[userID]
+	if set == nil {
+		set = make(map[int64]struct{})
+		s.userLikes[userID] = set
+	}
+	if _, exists := set[videoID]; exists {
+		return false, nil // 已点赞,幂等返回
+	}
+	set[videoID] = struct{}{}
+	v.LikeCount++
+	return true, nil
+}
+
+// Unlike 取消点赞(幂等)。
+func (s *Store) Unlike(userID, videoID int64) (changed bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[userID]; !ok {
+		return false, ErrNotFound
+	}
+	v, ok := s.videos[videoID]
+	if !ok {
+		return false, ErrNotFound
+	}
+	set := s.userLikes[userID]
+	if set == nil {
+		return false, nil
+	}
+	if _, exists := set[videoID]; !exists {
+		return false, nil
+	}
+	delete(set, videoID)
+	if v.LikeCount > 0 {
+		v.LikeCount--
+	}
+	return true, nil
+}
+
+// HasLiked 当前用户是否点赞过该视频。
+func (s *Store) HasLiked(userID, videoID int64) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	set := s.userLikes[userID]
+	if set == nil {
+		return false
+	}
+	_, ok := set[videoID]
+	return ok
+}
+
+// BatchHasLiked 批量查询点赞状态(用于信息流一次性补全)。
+func (s *Store) BatchHasLiked(userID int64, videoIDs []int64) map[int64]bool {
+	res := make(map[int64]bool, len(videoIDs))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	set := s.userLikes[userID]
+	for _, vid := range videoIDs {
+		if set == nil {
+			res[vid] = false
+			continue
+		}
+		_, ok := set[vid]
+		res[vid] = ok
+	}
+	return res
+}
+
+// ---------------- 评论 ----------------
+
+// AddComment 发表评论。
+func (s *Store) AddComment(videoID, userID int64, content string) (model.Comment, error) {
+	if content == "" {
+		return model.Comment{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[userID]; !ok {
+		return model.Comment{}, ErrNotFound
+	}
+	v, ok := s.videos[videoID]
+	if !ok {
+		return model.Comment{}, ErrNotFound
+	}
+	s.commentSeq++
+	c := &model.Comment{
+		ID:        s.commentSeq,
+		VideoID:   videoID,
+		UserID:    userID,
+		Content:   content,
+		CreatedAt: nowMilli(),
+	}
+	s.comments[c.ID] = c
+	s.videoComments[videoID] = append(s.videoComments[videoID], c.ID)
+	v.CommentCount++
+	return *c, nil
+}
+
+// ListComments 列出某视频的全部评论(按发表时间正序)。
+func (s *Store) ListComments(videoID int64) ([]model.Comment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.videos[videoID]; !ok {
+		return nil, ErrNotFound
+	}
+	ids := s.videoComments[videoID]
+	res := make([]model.Comment, 0, len(ids))
+	for _, id := range ids {
+		if c, ok := s.comments[id]; ok {
+			res = append(res, *c)
+		}
+	}
+	return res, nil
+}
+
+// ---------------- 关注 ----------------
+
+// Follow 关注(幂等)。不允许关注自己。
+func (s *Store) Follow(followerID, followeeID int64) error {
+	if followerID == followeeID {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[followerID]; !ok {
+		return ErrNotFound
+	}
+	if _, ok := s.users[followeeID]; !ok {
+		return ErrNotFound
+	}
+	if s.following[followerID] == nil {
+		s.following[followerID] = make(map[int64]struct{})
+	}
+	if s.followers[followeeID] == nil {
+		s.followers[followeeID] = make(map[int64]struct{})
+	}
+	s.following[followerID][followeeID] = struct{}{}
+	s.followers[followeeID][followerID] = struct{}{}
+	return nil
+}
+
+// Unfollow 取消关注(幂等)。
+func (s *Store) Unfollow(followerID, followeeID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m := s.following[followerID]; m != nil {
+		delete(m, followeeID)
+	}
+	if m := s.followers[followeeID]; m != nil {
+		delete(m, followerID)
+	}
+	return nil
+}
+
+// FollowingFeed 关注流:返回用户所关注的人发布的视频(按时间倒序分页)。
+// 这是设计文档里"读扩散/拉模型"的最简实现;数据量大时应改为收件箱写扩散。
+func (s *Store) FollowingFeed(userID, maxID int64, limit int) ([]model.Video, error) {
+	limit = clampLimit(limit)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.users[userID]; !ok {
+		return nil, ErrNotFound
+	}
+	followees := s.following[userID]
+	res := make([]model.Video, 0)
+	for _, v := range s.videos {
+		if _, ok := followees[v.AuthorID]; !ok {
+			continue
+		}
+		if maxID > 0 && v.ID >= maxID {
+			continue
+		}
+		res = append(res, *v)
+	}
+	sortByIDDesc(res)
+	return truncate(res, limit), nil
+}
+
+// ---------------- 演示数据 ----------------
+
+// Seed 注入演示数据,启动后即可直接体验各接口。
+func (s *Store) Seed() {
+	alice, _ := s.CreateUser("alice")
+	bob, _ := s.CreateUser("bob")
+	carol, _ := s.CreateUser("carol")
+
+	// 视频地址为占位 URL;可通过 POST /api/upload 上传真实视频后再发布。
+	s.CreateVideo(alice.ID, "猫咪的一天", "/uploads/sample-1.mp4", "")
+	s.CreateVideo(bob.ID, "海边日落", "/uploads/sample-2.mp4", "")
+	s.CreateVideo(alice.ID, "做一顿简单的早餐", "/uploads/sample-3.mp4", "")
+	s.CreateVideo(carol.ID, "城市夜骑", "/uploads/sample-4.mp4", "")
+
+	// carol 关注 alice 和 bob,便于演示关注流
+	_ = s.Follow(carol.ID, alice.ID)
+	_ = s.Follow(carol.ID, bob.ID)
+}
+
+// ---------------- 内部小工具 ----------------
+
+func clampLimit(limit int) int {
+	if limit <= 0 || limit > 50 {
+		return 10
+	}
+	return limit
+}
+
+func sortByIDDesc(vs []model.Video) {
+	sort.Slice(vs, func(i, j int) bool { return vs[i].ID > vs[j].ID })
+}
+
+func truncate(vs []model.Video, limit int) []model.Video {
+	if len(vs) > limit {
+		return vs[:limit]
+	}
+	return vs
+}
