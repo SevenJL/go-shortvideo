@@ -359,6 +359,56 @@ func (s *Store) FollowingFeed(userID, maxID int64, limit int) ([]model.Video, er
 	return truncate(res, limit), nil
 }
 
+// ListFollowers 分页拉取某用户的粉丝列表，供写扩散 Worker 使用。
+// cursor=0 从头开始；cursor>0 返回 ID 严格大于 cursor 的条目。
+// 返回的 next=0 表示已到末页。
+func (s *Store) ListFollowers(authorID, cursor int64, limit int) ([]int64, int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	set := s.followers[authorID]
+	all := make([]int64, 0, len(set))
+	for uid := range set {
+		all = append(all, uid)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
+
+	start := 0
+	if cursor > 0 {
+		for i, uid := range all {
+			if uid > cursor {
+				start = i
+				break
+			}
+			start = len(all) // cursor >= 所有 ID，返回空
+		}
+	}
+	if start >= len(all) {
+		return nil, 0, nil
+	}
+	end := start + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	page := all[start:end]
+	var next int64
+	if end < len(all) {
+		next = page[len(page)-1]
+	}
+	return page, next, nil
+}
+
+// ListFollowees 返回 userID 关注的所有人的 ID。
+func (s *Store) ListFollowees(userID int64) ([]int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	set := s.following[userID]
+	out := make([]int64, 0, len(set))
+	for uid := range set {
+		out = append(out, uid)
+	}
+	return out, nil
+}
+
 // ---------------- 演示数据 ----------------
 
 // Seed 注入演示数据,启动后即可直接体验各接口。
