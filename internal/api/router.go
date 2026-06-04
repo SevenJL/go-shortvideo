@@ -5,12 +5,13 @@ import (
 
 	"shortvideo/internal/auth"
 	"shortvideo/internal/feed"
+	"shortvideo/internal/rec"
 	"shortvideo/internal/store"
 )
 
 // NewRouter 构建并返回 HTTP 路由(基于 Go 1.22+ 的方法 + 路径模式匹配,无需第三方框架)。
-func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, fanoutPub FanoutPublisher) http.Handler {
-	h := NewHandler(s, uploadDir, jwtSecret, likeSvc, feedSvc, fanoutPub)
+func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher) http.Handler {
+	h := NewHandler(s, uploadDir, jwtSecret, likeSvc, feedSvc, recSvc, fanoutPub)
 	jwtAuth := auth.NewJWT(jwtSecret)
 	authMdw := jwtAuth.Middleware
 
@@ -38,6 +39,7 @@ func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService,
 	mux.Handle("POST /api/users/{id}/follow", authMdw(http.HandlerFunc(h.Follow)))
 	mux.Handle("DELETE /api/users/{id}/follow", authMdw(http.HandlerFunc(h.Unfollow)))
 	mux.Handle("GET /api/feed", authMdw(http.HandlerFunc(h.FollowingFeed)))
+	mux.Handle("GET /api/rec", authMdw(http.HandlerFunc(h.RecommendFeed)))
 	mux.Handle("POST /api/upload", authMdw(http.HandlerFunc(h.Upload)))
 
 	// 静态文件

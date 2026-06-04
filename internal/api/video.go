@@ -63,7 +63,8 @@ func (h *Handler) GetVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	item := videoItem{Video: v}
 	if uid, ok := currentUserID(r); ok {
-		item.Liked = h.store.HasLiked(uid, v.ID)
+		m, _ := h.likeSvc.BatchIsLiked(r.Context(), uid, []int64{v.ID})
+		item.Liked = m[v.ID]
 	}
 	writeOK(w, item)
 }

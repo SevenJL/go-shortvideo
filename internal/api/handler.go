@@ -11,6 +11,7 @@ import (
 	"shortvideo/internal/auth"
 	"shortvideo/internal/feed"
 	"shortvideo/internal/like"
+	"shortvideo/internal/rec"
 	"shortvideo/internal/store"
 )
 
@@ -56,13 +57,14 @@ type Handler struct {
 	jwtSecret  string
 	likeSvc    LikeService
 	feedSvc    *feed.Service
+	recSvc     *rec.Recommender
 	fanoutPub  FanoutPublisher
 }
 
-func NewHandler(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, fanoutPub FanoutPublisher) *Handler {
+func NewHandler(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher) *Handler {
 	return &Handler{
 		store: s, uploadDir: uploadDir, jwtSecret: jwtSecret,
-		likeSvc: likeSvc, feedSvc: feedSvc, fanoutPub: fanoutPub,
+		likeSvc: likeSvc, feedSvc: feedSvc, recSvc: recSvc, fanoutPub: fanoutPub,
 	}
 }
 
