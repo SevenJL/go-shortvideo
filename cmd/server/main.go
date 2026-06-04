@@ -17,6 +17,7 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP 监听地址,如 :8080")
 	uploadDir := flag.String("upload-dir", "./data/uploads", "视频上传保存目录")
+	jwtSecret := flag.String("jwt-secret", "dev-secret-change-in-production", "JWT 签名密钥(生产环境务必更换)")
 	seed := flag.Bool("seed", true, "是否注入演示数据")
 	flag.Parse()
 
@@ -32,7 +33,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         *addr,
-		Handler:      api.NewRouter(s, *uploadDir),
+		Handler:      api.NewRouter(s, *uploadDir, *jwtSecret),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,

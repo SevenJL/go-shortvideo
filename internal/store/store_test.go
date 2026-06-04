@@ -4,24 +4,45 @@ import (
 	"testing"
 )
 
+const testPass = "testpass"
+
 // -------- 用户 --------
 
 func TestCreateUser(t *testing.T) {
 	s := New()
-	u, err := s.CreateUser("alice")
+	u, err := s.CreateUser("alice", testPass)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.Username != "alice" || u.ID <= 0 {
 		t.Fatalf("unexpected user: %+v", u)
 	}
+	if u.PasswordHash == "" {
+		t.Fatal("password hash should not be empty")
+	}
 }
 
 func TestCreateUser_EmptyName(t *testing.T) {
 	s := New()
-	_, err := s.CreateUser("")
+	_, err := s.CreateUser("", testPass)
 	if err != ErrInvalid {
 		t.Fatalf("expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestCreateUser_EmptyPassword(t *testing.T) {
+	s := New()
+	_, err := s.CreateUser("alice", "")
+	if err != ErrInvalid {
+		t.Fatalf("expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestCreateUser_ShortPassword(t *testing.T) {
+	s := New()
+	_, err := s.CreateUser("alice", "12345")
+	if err == nil {
+		t.Fatal("expected error for short password")
 	}
 }
 
@@ -35,10 +56,51 @@ func TestGetUser_NotFound(t *testing.T) {
 
 func TestGetUser(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("bob")
+	u, _ := s.CreateUser("bob", testPass)
 	got, err := s.GetUser(u.ID)
 	if err != nil || got.Username != "bob" {
 		t.Fatalf("got %+v err %v", got, err)
+	}
+}
+
+func TestGetUserByUsername(t *testing.T) {
+	s := New()
+	s.CreateUser("charlie", testPass)
+
+	got, err := s.GetUserByUsername("charlie")
+	if err != nil || got.Username != "charlie" {
+		t.Fatalf("got %+v err %v", got, err)
+	}
+
+	_, err = s.GetUserByUsername("nobody")
+	if err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestAuthenticateUser(t *testing.T) {
+	s := New()
+	s.CreateUser("dave", "secret123")
+
+	// 正确密码
+	u, err := s.AuthenticateUser("dave", "secret123")
+	if err != nil || u.Username != "dave" {
+		t.Fatalf("auth failed: %+v err=%v", u, err)
+	}
+	if u.PasswordHash != "" {
+		t.Fatal("returned user should have password hash cleared")
+	}
+
+	// 错误密码
+	_, err = s.AuthenticateUser("dave", "wrongpass")
+	if err != ErrWrongPassword {
+		t.Fatalf("expected ErrWrongPassword, got %v", err)
+	}
+
+	// 用户不存在
+	_, err = s.AuthenticateUser("nobody", "secret123")
+	if err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
@@ -46,7 +108,7 @@ func TestGetUser(t *testing.T) {
 
 func TestCreateVideo(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("alice")
+	u, _ := s.CreateUser("alice", testPass)
 	v, err := s.CreateVideo(u.ID, "测试视频", "/uploads/a.mp4", "")
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +128,7 @@ func TestCreateVideo_InvalidAuthor(t *testing.T) {
 
 func TestCreateVideo_EmptyTitle(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("alice")
+	u, _ := s.CreateUser("alice", testPass)
 	_, err := s.CreateVideo(u.ID, "", "/uploads/a.mp4", "")
 	if err != ErrInvalid {
 		t.Fatalf("expected ErrInvalid, got %v", err)
@@ -75,7 +137,7 @@ func TestCreateVideo_EmptyTitle(t *testing.T) {
 
 func TestCreateVideo_EmptyPlayURL(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("alice")
+	u, _ := s.CreateUser("alice", testPass)
 	_, err := s.CreateVideo(u.ID, "title", "", "")
 	if err != ErrInvalid {
 		t.Fatalf("expected ErrInvalid, got %v", err)
@@ -84,7 +146,7 @@ func TestCreateVideo_EmptyPlayURL(t *testing.T) {
 
 func TestListVideos_CursorPagination(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("alice")
+	u, _ := s.CreateUser("alice", testPass)
 	for i := 0; i < 5; i++ {
 		s.CreateVideo(u.ID, "v", "/uploads/x.mp4", "")
 	}
@@ -92,13 +154,11 @@ func TestListVideos_CursorPagination(t *testing.T) {
 	if len(page1) != 3 {
 		t.Fatalf("want 3, got %d", len(page1))
 	}
-	// 第一页最小 ID 作为 max_id
 	cursor := page1[len(page1)-1].ID
 	page2 := s.ListVideos(cursor, 3)
 	if len(page2) != 2 {
 		t.Fatalf("want 2, got %d", len(page2))
 	}
-	// 验证不重叠
 	seen := map[int64]bool{}
 	for _, v := range page1 {
 		seen[v.ID] = true
@@ -112,8 +172,8 @@ func TestListVideos_CursorPagination(t *testing.T) {
 
 func TestListUserVideos(t *testing.T) {
 	s := New()
-	alice, _ := s.CreateUser("alice")
-	bob, _ := s.CreateUser("bob")
+	alice, _ := s.CreateUser("alice", testPass)
+	bob, _ := s.CreateUser("bob", testPass)
 	s.CreateVideo(alice.ID, "a1", "/uploads/a1.mp4", "")
 	s.CreateVideo(bob.ID, "b1", "/uploads/b1.mp4", "")
 	s.CreateVideo(alice.ID, "a2", "/uploads/a2.mp4", "")
@@ -133,7 +193,7 @@ func TestListUserVideos(t *testing.T) {
 
 func TestLike_Idempotent(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("u")
+	u, _ := s.CreateUser("u", testPass)
 	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
 
 	changed1, err := s.Like(u.ID, v.ID)
@@ -154,7 +214,7 @@ func TestLike_Idempotent(t *testing.T) {
 
 func TestUnlike_Idempotent(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("u")
+	u, _ := s.CreateUser("u", testPass)
 	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
 	s.Like(u.ID, v.ID)
 
@@ -176,7 +236,7 @@ func TestUnlike_Idempotent(t *testing.T) {
 
 func TestHasLiked(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("u")
+	u, _ := s.CreateUser("u", testPass)
 	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
 
 	if s.HasLiked(u.ID, v.ID) {
@@ -190,7 +250,7 @@ func TestHasLiked(t *testing.T) {
 
 func TestBatchHasLiked(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("u")
+	u, _ := s.CreateUser("u", testPass)
 	v1, _ := s.CreateVideo(u.ID, "v1", "/uploads/v1.mp4", "")
 	v2, _ := s.CreateVideo(u.ID, "v2", "/uploads/v2.mp4", "")
 	s.Like(u.ID, v1.ID)
@@ -208,7 +268,7 @@ func TestBatchHasLiked(t *testing.T) {
 
 func TestAddComment(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("u")
+	u, _ := s.CreateUser("u", testPass)
 	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
 
 	c, err := s.AddComment(v.ID, u.ID, "hello")
@@ -224,7 +284,7 @@ func TestAddComment(t *testing.T) {
 
 func TestListComments_Order(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("u")
+	u, _ := s.CreateUser("u", testPass)
 	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
 	s.AddComment(v.ID, u.ID, "first")
 	s.AddComment(v.ID, u.ID, "second")
@@ -240,7 +300,7 @@ func TestListComments_Order(t *testing.T) {
 
 func TestAddComment_EmptyContent(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("u")
+	u, _ := s.CreateUser("u", testPass)
 	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
 	_, err := s.AddComment(v.ID, u.ID, "")
 	if err != ErrInvalid {
@@ -252,8 +312,8 @@ func TestAddComment_EmptyContent(t *testing.T) {
 
 func TestFollow_Unfollow(t *testing.T) {
 	s := New()
-	alice, _ := s.CreateUser("alice")
-	bob, _ := s.CreateUser("bob")
+	alice, _ := s.CreateUser("alice", testPass)
+	bob, _ := s.CreateUser("bob", testPass)
 
 	if err := s.Follow(alice.ID, bob.ID); err != nil {
 		t.Fatal(err)
@@ -278,7 +338,7 @@ func TestFollow_Unfollow(t *testing.T) {
 
 func TestFollow_Self(t *testing.T) {
 	s := New()
-	u, _ := s.CreateUser("u")
+	u, _ := s.CreateUser("u", testPass)
 	err := s.Follow(u.ID, u.ID)
 	if err != ErrInvalid {
 		t.Fatalf("expected ErrInvalid, got %v", err)
@@ -287,10 +347,10 @@ func TestFollow_Self(t *testing.T) {
 
 func TestFollow_Idempotent(t *testing.T) {
 	s := New()
-	alice, _ := s.CreateUser("alice")
-	bob, _ := s.CreateUser("bob")
+	alice, _ := s.CreateUser("alice", testPass)
+	bob, _ := s.CreateUser("bob", testPass)
 	s.Follow(alice.ID, bob.ID)
-	s.Follow(alice.ID, bob.ID) // 重复关注
+	s.Follow(alice.ID, bob.ID)
 	_, followers := s.FollowStats(bob.ID)
 	if followers != 1 {
 		t.Fatalf("want 1, got %d", followers)
@@ -301,15 +361,15 @@ func TestFollow_Idempotent(t *testing.T) {
 
 func TestFollowingFeed(t *testing.T) {
 	s := New()
-	alice, _ := s.CreateUser("alice")
-	bob, _ := s.CreateUser("bob")
-	carol, _ := s.CreateUser("carol")
+	alice, _ := s.CreateUser("alice", testPass)
+	bob, _ := s.CreateUser("bob", testPass)
+	carol, _ := s.CreateUser("carol", testPass)
 
 	s.CreateVideo(alice.ID, "a1", "/uploads/a1.mp4", "")
 	s.CreateVideo(bob.ID, "b1", "/uploads/b1.mp4", "")
 	s.CreateVideo(carol.ID, "c1", "/uploads/c1.mp4", "")
 
-	s.Follow(bob.ID, alice.ID) // bob 关注 alice
+	s.Follow(bob.ID, alice.ID)
 
 	feed, err := s.FollowingFeed(bob.ID, 0, 10)
 	if err != nil {

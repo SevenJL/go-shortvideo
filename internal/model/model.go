@@ -2,9 +2,10 @@ package model
 
 // User 用户
 type User struct {
-	ID        int64  `json:"id"`
-	Username  string `json:"username"`
-	CreatedAt int64  `json:"created_at"` // 毫秒时间戳
+	ID           int64  `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"-"`       // bcrypt hash, JSON 序列化时排除
+	CreatedAt    int64  `json:"created_at"` // 毫秒时间戳
 }
 
 // Video 短视频元信息。真正的视频文件由 PlayURL 指向(本地 /uploads/xxx 或外部 CDN)。

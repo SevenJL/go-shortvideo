@@ -6,13 +6,16 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"shortvideo/internal/model"
 )
 
 // 业务错误
 var (
-	ErrNotFound = errors.New("资源不存在")
-	ErrInvalid  = errors.New("参数非法")
+	ErrNotFound      = errors.New("资源不存在")
+	ErrInvalid       = errors.New("参数非法")
+	ErrWrongPassword = errors.New("密码错误")
 )
 
 // Store 是线程安全的内存存储(演示用,进程重启后数据丢失)。
@@ -61,16 +64,50 @@ func nowMilli() int64 { return time.Now().UnixMilli() }
 
 // ---------------- 用户 ----------------
 
-// CreateUser 创建用户。
-func (s *Store) CreateUser(username string) (*model.User, error) {
-	if username == "" {
+// CreateUser 创建用户。password 会经 bcrypt 哈希后存储。
+func (s *Store) CreateUser(username, password string) (*model.User, error) {
+	if username == "" || password == "" {
 		return nil, ErrInvalid
+	}
+	if len(password) < 6 {
+		return nil, errors.New("密码长度不能少于 6 位")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.userSeq++
-	u := &model.User{ID: s.userSeq, Username: username, CreatedAt: nowMilli()}
+	u := &model.User{ID: s.userSeq, Username: username, PasswordHash: string(hash), CreatedAt: nowMilli()}
 	s.users[u.ID] = u
+	return u, nil
+}
+
+// GetUserByUsername 通过用户名查找用户（用于登录）。
+func (s *Store) GetUserByUsername(username string) (*model.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, u := range s.users {
+		if u.Username == username {
+			cp := *u
+			return &cp, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+// AuthenticateUser 验证用户名和密码，成功返回用户。
+func (s *Store) AuthenticateUser(username, password string) (*model.User, error) {
+	u, err := s.GetUserByUsername(username)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
+		return nil, ErrWrongPassword
+	}
+	// 返回时抹去密码哈希
+	u.PasswordHash = ""
 	return u, nil
 }
 
@@ -413,9 +450,9 @@ func (s *Store) ListFollowees(userID int64) ([]int64, error) {
 
 // Seed 注入演示数据,启动后即可直接体验各接口。
 func (s *Store) Seed() {
-	alice, _ := s.CreateUser("alice")
-	bob, _ := s.CreateUser("bob")
-	carol, _ := s.CreateUser("carol")
+	alice, _ := s.CreateUser("alice", "password123")
+	bob, _ := s.CreateUser("bob", "password123")
+	carol, _ := s.CreateUser("carol", "password123")
 
 	// 视频地址为占位 URL;可通过 POST /api/upload 上传真实视频后再发布。
 	s.CreateVideo(alice.ID, "猫咪的一天", "/uploads/sample-1.mp4", "")

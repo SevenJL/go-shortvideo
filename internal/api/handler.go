@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"shortvideo/internal/auth"
 	"shortvideo/internal/store"
 )
 
@@ -14,15 +15,21 @@ import (
 type Handler struct {
 	store     *store.Store
 	uploadDir string
+	jwtSecret string
 }
 
-func NewHandler(s *store.Store, uploadDir string) *Handler {
-	return &Handler{store: s, uploadDir: uploadDir}
+func NewHandler(s *store.Store, uploadDir, jwtSecret string) *Handler {
+	return &Handler{store: s, uploadDir: uploadDir, jwtSecret: jwtSecret}
 }
 
-// currentUserID 从 X-User-Id 请求头解析"当前操作用户"。
-// 这是为演示而做的极简鉴权,真实项目应替换为 JWT / Session。
+// currentUserID 从请求 context 中解析"当前操作用户"(由 auth.Middleware 注入)。
+// 同时兼容旧的 X-User-Id 头(用于未启用中间件的路由,如 GetVideo)。
 func currentUserID(r *http.Request) (int64, bool) {
+	// 优先从 auth 中间件注入的 context 取值
+	if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+		return uid, true
+	}
+	// Fallback: 直接读 X-User-Id 头(用于不需要强鉴权的只读接口)
 	raw := r.Header.Get("X-User-Id")
 	if raw == "" {
 		return 0, false
@@ -70,11 +77,11 @@ func storeErrStatus(err error) int {
 	}
 }
 
-// requireUser 是需要登录态的处理器的统一前置:解析 X-User-Id,失败则返回 401。
+// requireUser 是需要登录态的处理器的统一前置:从 context 获取鉴权后的 userID,失败则返回 401。
 func requireUser(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	uid, ok := currentUserID(r)
+	uid, ok := auth.UserIDFromContext(r.Context())
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "缺少或非法的 X-User-Id 请求头")
+		writeErr(w, http.StatusUnauthorized, "缺少认证信息: 请提供 Authorization: Bearer <token> 或 X-User-Id 头")
 		return 0, false
 	}
 	return uid, true
