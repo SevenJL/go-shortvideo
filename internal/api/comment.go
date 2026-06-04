@@ -1,49 +1,50 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
 
 type addCommentReq struct {
-	Content string `json:"content"`
+	Content string `json:"content" binding:"required"`
 }
 
-// AddComment 处理 POST /api/videos/{id}/comments(需要 X-User-Id)
-func (h *Handler) AddComment(w http.ResponseWriter, r *http.Request) {
-	uid, ok := requireUser(w, r)
+func (h *Handler) AddComment(c *gin.Context) {
+	uid, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	id, err := pathID(r, "id")
+	id, err := pathID(c, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "视频 id 非法")
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "视频 id 非法"})
 		return
 	}
 	var req addCommentReq
-	if err := decodeJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "请求体格式错误")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求体格式错误"})
 		return
 	}
-	c, err := h.store.AddComment(id, uid, req.Content)
+	comment, err := h.store.AddComment(id, uid, req.Content)
 	if err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
-	writeOK(w, c)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": comment})
 }
 
-// ListComments 处理 GET /api/videos/{id}/comments
-func (h *Handler) ListComments(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r, "id")
+func (h *Handler) ListComments(c *gin.Context) {
+	id, err := pathID(c, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "视频 id 非法")
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "视频 id 非法"})
 		return
 	}
 	list, err := h.store.ListComments(id)
 	if err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
-	writeOK(w, map[string]interface{}{
-		"items": list,
-		"total": len(list),
-	})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
+		"items": list, "total": len(list),
+	}})
 }

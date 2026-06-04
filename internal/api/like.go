@@ -1,51 +1,49 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
 
-// Like 处理 POST /api/videos/{id}/like(需要 X-User-Id)
-func (h *Handler) Like(w http.ResponseWriter, r *http.Request) {
-	uid, ok := requireUser(w, r)
+	"github.com/gin-gonic/gin"
+)
+
+func (h *Handler) Like(c *gin.Context) {
+	uid, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	id, err := pathID(r, "id")
+	id, err := pathID(c, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "视频 id 非法")
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "视频 id 非法"})
 		return
 	}
 	changed, err := h.likeSvc.Like(uid, id)
 	if err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
 	cnt, _ := h.likeSvc.Count(id)
-	writeOK(w, map[string]interface{}{
-		"changed":    changed,
-		"liked":      true,
-		"like_count": cnt,
-	})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
+		"changed": changed, "liked": true, "like_count": cnt,
+	}})
 }
 
-// Unlike 处理 DELETE /api/videos/{id}/like(需要 X-User-Id)
-func (h *Handler) Unlike(w http.ResponseWriter, r *http.Request) {
-	uid, ok := requireUser(w, r)
+func (h *Handler) Unlike(c *gin.Context) {
+	uid, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	id, err := pathID(r, "id")
+	id, err := pathID(c, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "视频 id 非法")
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "视频 id 非法"})
 		return
 	}
 	changed, err := h.likeSvc.Unlike(uid, id)
 	if err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
 	cnt, _ := h.likeSvc.Count(id)
-	writeOK(w, map[string]interface{}{
-		"changed":    changed,
-		"liked":      false,
-		"like_count": cnt,
-	})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
+		"changed": changed, "liked": false, "like_count": cnt,
+	}})
 }

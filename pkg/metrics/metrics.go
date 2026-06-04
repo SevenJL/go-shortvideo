@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ---- 指标类型 ----
@@ -292,18 +294,29 @@ func Handler() http.Handler {
 	})
 }
 
-// Middleware 记录每个 HTTP 请求的计数和延迟。
+// Middleware 记录每个 HTTP 请求的计数和延迟（标准库）。
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
 		dur := time.Since(start)
-
 		status := strconv.Itoa(sw.status)
 		HTTPRequests.WithLabelValues(r.Method, r.URL.Path, status).Inc()
 		RecordLatency(HTTPDuration, r.Method, r.URL.Path, dur)
 	})
+}
+
+// GinMiddleware 记录每个 Gin 请求的计数和延迟。
+func GinMiddleware() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		dur := time.Since(start)
+		status := strconv.Itoa(c.Writer.Status())
+		HTTPRequests.WithLabelValues(c.Request.Method, c.Request.URL.Path, status).Inc()
+		RecordLatency(HTTPDuration, c.Request.Method, c.Request.URL.Path, dur)
+	}
 }
 
 type statusWriter struct {
@@ -314,6 +327,11 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+func init() {
+	// 注册 gin 所需的类型断言
+	var _ = gin.DefaultWriter
 }
 
 // ---- 工具 ----

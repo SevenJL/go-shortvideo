@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
+
+func init() { gin.SetMode(gin.TestMode) }
 
 func TestLimiter_Allow(t *testing.T) {
 	l := New(10, 20)
@@ -56,52 +59,53 @@ func TestLimiter_Cleanup(t *testing.T) {
 	}
 }
 
-func TestMiddleware_Allows(t *testing.T) {
-	l := New(100, 100)
-	handler := l.Middleware(KeyFromIP)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestPathLimiter_Middleware(t *testing.T) {
+	pl := NewPathLimiter(map[string][2]int{"/api/videos": {100, 200}}, New(500, 1000))
+	handler := pl.Middleware(KeyFromIP)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/videos/1/like", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
 	}
 }
 
-func TestMiddleware_Blocks(t *testing.T) {
-	l := New(0, 0) // 限速为 0
-	handler := l.Middleware(KeyFromIP)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
+func TestPathLimiter_Blocks(t *testing.T) {
+	pl := NewPathLimiter(map[string][2]int{"/test": {0, 1}}, nil)
+	handler := pl.Middleware(func(r *http.Request) string { return "test-key" })(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("want 429, got %d", w.Code)
+	req.RemoteAddr = "1.1.1.1:1234"
+	// First request passes (burst=1)
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, req)
+	// Second request blocked (rate=0)
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req)
+	if w2.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d", w2.Code)
 	}
 }
 
-func TestMiddleware_EmptyKey(t *testing.T) {
-	l := New(0, 0)
+func TestPathLimiter_EmptyKey(t *testing.T) {
+	pl := NewPathLimiter(map[string][2]int{"/test": {0, 1}}, nil)
 	called := false
-	handler := l.Middleware(func(r *http.Request) string { return "" })(
+	handler := pl.Middleware(func(r *http.Request) string { return "" })(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called = true
 			w.WriteHeader(http.StatusOK)
 		}),
 	)
-
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-
 	if !called || w.Code != http.StatusOK {
-		t.Fatal("empty key should bypass rate limit")
+		t.Fatal("empty key should bypass")
 	}
 }
 
@@ -123,11 +127,24 @@ func TestKeyFromIP_XForwardedFor(t *testing.T) {
 	}
 }
 
-func TestKeyFromUserID(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-User-Id", "42")
-	key := KeyFromUserID(req)
+func TestKeyFromUserIDGin(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request.Header.Set("X-User-Id", "42")
+	key := KeyFromUserID(c)
 	if key != "uid:42" {
+		t.Fatalf("unexpected key: %s", key)
+	}
+}
+
+func TestKeyFromIPGin(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request.RemoteAddr = "10.0.0.1:1234"
+	key := KeyFromIPGin(c)
+	if key != "ip:10.0.0.1" {
 		t.Fatalf("unexpected key: %s", key)
 	}
 }

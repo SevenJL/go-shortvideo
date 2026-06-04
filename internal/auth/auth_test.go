@@ -6,34 +6,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+func init() { gin.SetMode(gin.TestMode) }
 
 const testSecret = "test-secret"
 
 func TestGenerateAndValidate(t *testing.T) {
 	j := NewJWT(testSecret)
 	tok, err := j.GenerateToken(42)
-	if err != nil {
+	if err != nil || tok == "" {
 		t.Fatalf("generate: %v", err)
 	}
-	if tok == "" {
-		t.Fatal("token should not be empty")
-	}
-
 	uid, err := j.ValidateToken(tok)
-	if err != nil {
-		t.Fatalf("validate: %v", err)
-	}
-	if uid != 42 {
-		t.Fatalf("want uid 42, got %d", uid)
+	if err != nil || uid != 42 {
+		t.Fatalf("validate: uid=%d err=%v", uid, err)
 	}
 }
 
 func TestValidateExpiredToken(t *testing.T) {
 	j := NewJWT(testSecret)
-
-	// 手动构造一个已过期的 token
 	now := time.Now()
 	c := claims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -44,147 +38,132 @@ func TestValidateExpiredToken(t *testing.T) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, c)
 	tok, _ := token.SignedString(j.secret)
-
 	_, err := j.ValidateToken(tok)
 	if err != ErrInvalidToken {
-		t.Fatalf("expected ErrInvalidToken for expired token, got %v", err)
+		t.Fatalf("expected ErrInvalidToken, got %v", err)
 	}
 }
 
 func TestValidateMalformedToken(t *testing.T) {
 	j := NewJWT(testSecret)
-
 	_, err := j.ValidateToken("not.a.token")
 	if err != ErrInvalidToken {
 		t.Fatalf("expected ErrInvalidToken, got %v", err)
 	}
-
 	_, err = j.ValidateToken("")
 	if err != ErrInvalidToken {
-		t.Fatalf("expected ErrInvalidToken for empty token, got %v", err)
+		t.Fatalf("expected ErrInvalidToken, got %v", err)
 	}
 }
 
 func TestValidateToken_WrongSecret(t *testing.T) {
-	j1 := NewJWT("secret-a")
-	j2 := NewJWT("secret-b")
-
+	j1 := NewJWT("a")
+	j2 := NewJWT("b")
 	tok, _ := j1.GenerateToken(1)
 	_, err := j2.ValidateToken(tok)
 	if err != ErrInvalidToken {
-		t.Fatalf("expected ErrInvalidToken for wrong secret, got %v", err)
+		t.Fatalf("expected ErrInvalidToken, got %v", err)
 	}
 }
 
-func TestAuthMiddleware_BearerToken(t *testing.T) {
+func ginTestCtx(t *testing.T, bearerToken, xUserID string) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	if bearerToken != "" {
+		c.Request.Header.Set("Authorization", "Bearer "+bearerToken)
+	}
+	if xUserID != "" {
+		c.Request.Header.Set("X-User-Id", xUserID)
+	}
+	return c, w
+}
+
+func TestGinMiddleware_BearerToken(t *testing.T) {
 	j := NewJWT(testSecret)
 	tok, _ := j.GenerateToken(7)
+	c, w := ginTestCtx(t, tok, "")
 
-	var gotUID int64
-	handler := j.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uid, _ := UserIDFromContext(r.Context())
-		gotUID = uid
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
+	called := false
+	j.GinMiddleware()(c)
+	if !c.IsAborted() {
+		called = true
+		c.Status(http.StatusOK)
+	}
+	if !called {
+		t.Fatal("handler should have been called")
+	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
 	}
-	if gotUID != 7 {
-		t.Fatalf("want uid 7, got %d", gotUID)
+	uid, _ := c.Get("user_id")
+	if uid.(int64) != 7 {
+		t.Fatalf("want uid 7, got %v", uid)
 	}
 }
 
-func TestAuthMiddleware_FallbackXUserId(t *testing.T) {
+func TestGinMiddleware_FallbackXUserId(t *testing.T) {
 	j := NewJWT(testSecret)
+	c, _ := ginTestCtx(t, "", "99")
 
-	var gotUID int64
-	handler := j.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uid, _ := UserIDFromContext(r.Context())
-		gotUID = uid
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-User-Id", "99")
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", w.Code)
+	called := false
+	j.GinMiddleware()(c)
+	if !c.IsAborted() {
+		called = true
+		c.Status(http.StatusOK)
 	}
-	if gotUID != 99 {
-		t.Fatalf("want uid 99, got %d", gotUID)
+	if !called {
+		t.Fatal("handler should have been called")
+	}
+	uid, _ := c.Get("user_id")
+	if uid.(int64) != 99 {
+		t.Fatalf("want 99, got %v", uid)
 	}
 }
 
-func TestAuthMiddleware_NoAuth(t *testing.T) {
+func TestGinMiddleware_NoAuth(t *testing.T) {
 	j := NewJWT(testSecret)
+	c, w := ginTestCtx(t, "", "")
 
-	handler := j.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("handler should not be called")
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
+	j.GinMiddleware()(c)
+	if !c.IsAborted() {
+		t.Fatal("should abort without auth")
+	}
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", w.Code)
 	}
 }
 
-func TestAuthMiddleware_BearerPriority(t *testing.T) {
-	// JWT 优先于 X-User-Id
+func TestGinMiddleware_BearerPriority(t *testing.T) {
 	j := NewJWT(testSecret)
 	tok, _ := j.GenerateToken(42)
+	c, _ := ginTestCtx(t, tok, "99")
 
-	var gotUID int64
-	handler := j.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uid, _ := UserIDFromContext(r.Context())
-		gotUID = uid
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("X-User-Id", "99") // 应被忽略
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if gotUID != 42 {
-		t.Fatalf("JWT should take priority: want 42, got %d", gotUID)
+	called := false
+	j.GinMiddleware()(c)
+	if !c.IsAborted() {
+		called = true
+		c.Status(http.StatusOK)
+	}
+	if !called {
+		t.Fatal("handler should have been called")
+	}
+	uid, _ := c.Get("user_id")
+	if uid.(int64) != 42 {
+		t.Fatalf("JWT should take priority: want 42, got %v", uid)
 	}
 }
 
-func TestAuthMiddleware_InvalidJWT_NoFallback(t *testing.T) {
-	// 无效 JWT 不应 fallback 到 X-User-Id
+func TestGinMiddleware_InvalidJWT_NoFallback(t *testing.T) {
 	j := NewJWT(testSecret)
+	c, w := ginTestCtx(t, "invalid.token", "99")
 
-	handler := j.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("handler should not be called with invalid JWT")
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer invalid.token.here")
-	req.Header.Set("X-User-Id", "99") // 不应被使用
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401 for invalid JWT, got %d", w.Code)
+	j.GinMiddleware()(c)
+	if !c.IsAborted() {
+		t.Fatal("should abort with invalid JWT")
 	}
-}
-
-func TestUserIDFromContext_NoValue(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	_, ok := UserIDFromContext(req.Context())
-	if ok {
-		t.Fatal("expected false when no userID in context")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", w.Code)
 	}
 }

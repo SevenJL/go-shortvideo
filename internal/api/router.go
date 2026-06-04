@@ -1,7 +1,9 @@
 package api
 
 import (
-	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"shortvideo/internal/auth"
 	"shortvideo/internal/feed"
@@ -9,41 +11,75 @@ import (
 	"shortvideo/internal/store"
 )
 
-// NewRouter 构建并返回 HTTP 路由(基于 Go 1.22+ 的方法 + 路径模式匹配,无需第三方框架)。
-func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher) http.Handler {
+func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher) *gin.Engine {
 	h := NewHandler(s, uploadDir, jwtSecret, likeSvc, feedSvc, recSvc, fanoutPub)
 	jwtAuth := auth.NewJWT(jwtSecret)
-	authMdw := jwtAuth.Middleware
+	authMdw := jwtAuth.GinMiddleware()
 
-	mux := http.NewServeMux()
+	r := gin.New()
+	r.Use(ginLogger(), gin.Recovery())
 
-	// 无需鉴权
-	mux.HandleFunc("POST /api/users", h.CreateUser)   // 注册
-	mux.HandleFunc("POST /api/login", h.Login)         // 登录
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeOK(w, map[string]string{"status": "ok"})
+	// 公开（无需鉴权）
+	r.POST("/api/users", h.CreateUser)
+	r.POST("/api/login", h.Login)
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(200, gin.H{"code": 0, "msg": "ok", "data": gin.H{"status": "ok"}})
 	})
 
-	// 只读接口 — 可选鉴权(有 token 则补全 liked 态)
-	mux.HandleFunc("GET /api/users/{id}", h.GetUser)
-	mux.HandleFunc("GET /api/users/{id}/videos", h.ListUserVideos)
-	mux.HandleFunc("GET /api/videos", h.ListVideos)
-	mux.HandleFunc("GET /api/videos/{id}", h.GetVideo)
-	mux.HandleFunc("GET /api/videos/{id}/comments", h.ListComments)
+	// 只读（可选鉴权）
+	r.GET("/api/users/:id", h.GetUser)
+	r.GET("/api/users/:id/videos", h.ListUserVideos)
+	r.GET("/api/videos", h.ListVideos)
+	r.GET("/api/videos/:id", h.GetVideo)
+	r.GET("/api/videos/:id/comments", h.ListComments)
 
-	// 需要鉴权的写接口
-	mux.Handle("POST /api/videos", authMdw(http.HandlerFunc(h.PublishVideo)))
-	mux.Handle("POST /api/videos/{id}/like", authMdw(http.HandlerFunc(h.Like)))
-	mux.Handle("DELETE /api/videos/{id}/like", authMdw(http.HandlerFunc(h.Unlike)))
-	mux.Handle("POST /api/videos/{id}/comments", authMdw(http.HandlerFunc(h.AddComment)))
-	mux.Handle("POST /api/users/{id}/follow", authMdw(http.HandlerFunc(h.Follow)))
-	mux.Handle("DELETE /api/users/{id}/follow", authMdw(http.HandlerFunc(h.Unfollow)))
-	mux.Handle("GET /api/feed", authMdw(http.HandlerFunc(h.FollowingFeed)))
-	mux.Handle("GET /api/rec", authMdw(http.HandlerFunc(h.RecommendFeed)))
-	mux.Handle("POST /api/upload", authMdw(http.HandlerFunc(h.Upload)))
+	// 鉴权组
+	auth := r.Group("/api")
+	auth.Use(authMdw)
+	{
+		auth.POST("/videos", h.PublishVideo)
+		auth.POST("/videos/:id/like", h.Like)
+		auth.DELETE("/videos/:id/like", h.Unlike)
+		auth.POST("/videos/:id/comments", h.AddComment)
+		auth.POST("/users/:id/follow", h.Follow)
+		auth.DELETE("/users/:id/follow", h.Unfollow)
+		auth.GET("/feed", h.FollowingFeed)
+		auth.GET("/rec", h.RecommendFeed)
+		auth.POST("/upload", h.Upload)
+	}
 
 	// 静态文件
-	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
+	r.Static("/uploads", uploadDir)
 
-	return withLogging(mux)
+	return r
+}
+
+// ginLogger 简单的访问日志（替代之前的 withLogging）。
+func ginLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		gin.DefaultWriter.Write([]byte(
+			"[" + time.Now().Format("2006/01/02 15:04:05") + "] " +
+				c.Request.Method + " " + c.Request.URL.Path + " -> " +
+				itoa(c.Writer.Status()) + " (" + time.Since(start).String() + ")\n",
+		))
+	}
+}
+
+func itoa(n int) string { return defaultItoa(n) }
+
+// 避免 import fmt 的简化版 itoa。
+func defaultItoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [10]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }

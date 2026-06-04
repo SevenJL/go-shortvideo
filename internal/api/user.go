@@ -3,73 +3,67 @@ package api
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"shortvideo/internal/auth"
 )
 
 type createUserReq struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required,min=6"`
 }
 
-// CreateUser 处理 POST /api/users（注册，无需鉴权）
-func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreateUser(c *gin.Context) {
 	var req createUserReq
-	if err := decodeJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "请求体格式错误")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求体格式错误或密码少于6位"})
 		return
 	}
 	u, err := h.store.CreateUser(req.Username, req.Password)
 	if err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
-	writeOK(w, u)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": u})
 }
 
 type loginReq struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
 }
 
-// Login 处理 POST /api/login，验证用户名密码并返回 JWT。
-func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Login(c *gin.Context) {
 	var req loginReq
-	if err := decodeJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "请求体格式错误")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求体格式错误"})
 		return
 	}
 	u, err := h.store.AuthenticateUser(req.Username, req.Password)
 	if err != nil {
-		writeErr(w, http.StatusUnauthorized, "用户名或密码错误")
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "用户名或密码错误"})
 		return
 	}
 	token, err := auth.NewJWT(h.jwtSecret).GenerateToken(u.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "令牌生成失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "令牌生成失败"})
 		return
 	}
-	writeOK(w, map[string]interface{}{
-		"token": token,
-		"user":  u,
-	})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{"token": token, "user": u}})
 }
 
-// GetUser 处理 GET /api/users/{id}
-func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r, "id")
+func (h *Handler) GetUser(c *gin.Context) {
+	id, err := pathID(c, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "用户 id 非法")
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "用户 id 非法"})
 		return
 	}
 	u, err := h.store.GetUser(id)
 	if err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
 	following, followers := h.store.FollowStats(id)
-	writeOK(w, map[string]interface{}{
-		"user":            u,
-		"following_count": following,
-		"follower_count":  followers,
-	})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
+		"user": u, "following_count": following, "follower_count": followers,
+	}})
 }

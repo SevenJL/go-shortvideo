@@ -1,77 +1,73 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
 
-// Follow 处理 POST /api/users/{id}/follow,表示"当前用户关注 {id}"(需要 X-User-Id)
-func (h *Handler) Follow(w http.ResponseWriter, r *http.Request) {
-	uid, ok := requireUser(w, r)
+	"github.com/gin-gonic/gin"
+)
+
+func (h *Handler) Follow(c *gin.Context) {
+	uid, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	target, err := pathID(r, "id")
+	target, err := pathID(c, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "用户 id 非法")
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "用户 id 非法"})
 		return
 	}
 	if err := h.store.Follow(uid, target); err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
-	writeOK(w, map[string]interface{}{"following": true})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{"following": true}})
 }
 
-// Unfollow 处理 DELETE /api/users/{id}/follow(需要 X-User-Id)
-func (h *Handler) Unfollow(w http.ResponseWriter, r *http.Request) {
-	uid, ok := requireUser(w, r)
+func (h *Handler) Unfollow(c *gin.Context) {
+	uid, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	target, err := pathID(r, "id")
+	target, err := pathID(c, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "用户 id 非法")
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "用户 id 非法"})
 		return
 	}
 	if err := h.store.Unfollow(uid, target); err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
-	writeOK(w, map[string]interface{}{"following": false})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{"following": false}})
 }
 
-// FollowingFeed 处理 GET /api/feed?max_id=&limit=(关注流,需要 X-User-Id)
-// 优先使用推拉结合路径(feedSvc)，不可用时 fallback 到纯拉模型(store)。
-func (h *Handler) FollowingFeed(w http.ResponseWriter, r *http.Request) {
-	uid, ok := requireUser(w, r)
+func (h *Handler) FollowingFeed(c *gin.Context) {
+	uid, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	maxID := queryInt(r, "max_id", 0)
-	limit := int(queryInt(r, "limit", 10))
+	maxID := queryInt(c, "max_id", 0)
+	limit := int(queryInt(c, "limit", 10))
 
-	// 推拉结合路径（需要 feedSvc + Redis）
 	if h.feedSvc != nil {
 		cursor := float64(maxID)
-		page, err := h.feedSvc.GetFollowingFeed(r.Context(), uid, cursor)
+		page, err := h.feedSvc.GetFollowingFeed(c.Request.Context(), uid, cursor)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
 			return
 		}
-		// 截断到请求的 limit
 		if len(page.Videos) > limit {
 			page.Videos = page.Videos[:limit]
 		}
-		writeOK(w, map[string]interface{}{
-			"items":       page.Videos,
-			"next_cursor": int64(page.NextCursor),
-		})
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
+			"items": page.Videos, "next_cursor": int64(page.NextCursor),
+		}})
 		return
 	}
 
-	// Fallback: 纯拉模型（内存 store）
 	videos, err := h.store.FollowingFeed(uid, maxID, limit)
 	if err != nil {
-		writeErr(w, storeErrStatus(err), err.Error())
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
 	}
-	h.writeFeed(w, r, videos)
+	h.writeFeed(c, videos)
 }
