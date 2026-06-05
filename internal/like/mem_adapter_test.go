@@ -13,8 +13,8 @@ func setupMemSvc(t *testing.T) (*MemLikeService, *store.Store) {
 	// 创建测试用户和视频
 	s.CreateUser("u1", "password123")
 	s.CreateUser("u2", "password123")
-	s.CreateVideo(1, "视频1", "/uploads/v1.mp4", "")
-	s.CreateVideo(1, "视频2", "/uploads/v2.mp4", "")
+	s.CreateVideo(1, "视频1", "/uploads/v1.mp4", "", 0, 0, 0, 0)
+	s.CreateVideo(1, "视频2", "/uploads/v2.mp4", "", 0, 0, 0, 0)
 	return NewMemLikeService(s), s
 }
 

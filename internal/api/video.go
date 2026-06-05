@@ -17,6 +17,10 @@ type publishReq struct {
 	Title    string `json:"title" binding:"required"`
 	PlayURL  string `json:"play_url" binding:"required"`
 	CoverURL string `json:"cover_url"`
+	Duration int    `json:"duration"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int64  `json:"file_size"`
 }
 
 func (h *Handler) PublishVideo(c *gin.Context) {
@@ -29,7 +33,8 @@ func (h *Handler) PublishVideo(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求体格式错误"})
 		return
 	}
-	v, err := h.store.CreateVideo(uid, req.Title, req.PlayURL, req.CoverURL)
+	v, err := h.store.CreateVideo(uid, req.Title, req.PlayURL, req.CoverURL,
+		req.Duration, req.Width, req.Height, req.FileSize)
 	if err != nil {
 		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
 		return
@@ -38,6 +43,36 @@ func (h *Handler) PublishVideo(c *gin.Context) {
 		h.fanoutPub.PublishFanout(uid, v.ID, v.CreatedAt)
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": v})
+}
+
+// VideoStatus 查询转码状态。
+func (h *Handler) VideoStatus(c *gin.Context) {
+	id, err := pathID(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "视频 id 非法"})
+		return
+	}
+	v, err := h.store.GetVideo(id)
+	if err != nil {
+		c.JSON(storeErrStatus(err), gin.H{"code": storeErrStatus(err), "msg": err.Error()})
+		return
+	}
+	statusText := map[model.VideoStatus]string{
+		model.VideoUploading:   "上传中",
+		model.VideoTranscoding: "转码中",
+		model.VideoReady:       "已完成",
+		model.VideoFailed:      "失败",
+	}[v.Status]
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
+		"video_id":    v.ID,
+		"status":      v.Status,
+		"status_text": statusText,
+		"play_url":    v.PlayURL,
+		"cover_url":   v.CoverURL,
+		"duration":    v.Duration,
+		"width":       v.Width,
+		"height":      v.Height,
+	}})
 }
 
 func (h *Handler) ListVideos(c *gin.Context) {

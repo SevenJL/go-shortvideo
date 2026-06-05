@@ -109,7 +109,7 @@ func TestAuthenticateUser(t *testing.T) {
 func TestCreateVideo(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("alice", testPass)
-	v, err := s.CreateVideo(u.ID, "测试视频", "/uploads/a.mp4", "")
+	v, err := s.CreateVideo(u.ID, "测试视频", "/uploads/a.mp4", "", 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestCreateVideo(t *testing.T) {
 
 func TestCreateVideo_InvalidAuthor(t *testing.T) {
 	s := New()
-	_, err := s.CreateVideo(99, "x", "/uploads/a.mp4", "")
+	_, err := s.CreateVideo(99, "x", "/uploads/a.mp4", "", 0, 0, 0, 0)
 	if err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -129,7 +129,7 @@ func TestCreateVideo_InvalidAuthor(t *testing.T) {
 func TestCreateVideo_EmptyTitle(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("alice", testPass)
-	_, err := s.CreateVideo(u.ID, "", "/uploads/a.mp4", "")
+	_, err := s.CreateVideo(u.ID, "", "/uploads/a.mp4", "", 0, 0, 0, 0)
 	if err != ErrInvalid {
 		t.Fatalf("expected ErrInvalid, got %v", err)
 	}
@@ -138,7 +138,7 @@ func TestCreateVideo_EmptyTitle(t *testing.T) {
 func TestCreateVideo_EmptyPlayURL(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("alice", testPass)
-	_, err := s.CreateVideo(u.ID, "title", "", "")
+	_, err := s.CreateVideo(u.ID, "title", "", "", 0, 0, 0, 0)
 	if err != ErrInvalid {
 		t.Fatalf("expected ErrInvalid, got %v", err)
 	}
@@ -148,7 +148,7 @@ func TestListVideos_CursorPagination(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("alice", testPass)
 	for i := 0; i < 5; i++ {
-		s.CreateVideo(u.ID, "v", "/uploads/x.mp4", "")
+		s.CreateVideo(u.ID, "v", "/uploads/x.mp4", "", 0, 0, 0, 0)
 	}
 	page1 := s.ListVideos(0, 3)
 	if len(page1) != 3 {
@@ -174,9 +174,9 @@ func TestListUserVideos(t *testing.T) {
 	s := New()
 	alice, _ := s.CreateUser("alice", testPass)
 	bob, _ := s.CreateUser("bob", testPass)
-	s.CreateVideo(alice.ID, "a1", "/uploads/a1.mp4", "")
-	s.CreateVideo(bob.ID, "b1", "/uploads/b1.mp4", "")
-	s.CreateVideo(alice.ID, "a2", "/uploads/a2.mp4", "")
+	s.CreateVideo(alice.ID, "a1", "/uploads/a1.mp4", "", 0, 0, 0, 0)
+	s.CreateVideo(bob.ID, "b1", "/uploads/b1.mp4", "", 0, 0, 0, 0)
+	s.CreateVideo(alice.ID, "a2", "/uploads/a2.mp4", "", 0, 0, 0, 0)
 
 	vs, err := s.ListUserVideos(alice.ID, 0, 10)
 	if err != nil || len(vs) != 2 {
@@ -194,7 +194,7 @@ func TestListUserVideos(t *testing.T) {
 func TestLike_Idempotent(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("u", testPass)
-	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "", 0, 0, 0, 0)
 
 	changed1, err := s.Like(u.ID, v.ID)
 	if err != nil || !changed1 {
@@ -215,7 +215,7 @@ func TestLike_Idempotent(t *testing.T) {
 func TestUnlike_Idempotent(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("u", testPass)
-	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "", 0, 0, 0, 0)
 	s.Like(u.ID, v.ID)
 
 	changed, err := s.Unlike(u.ID, v.ID)
@@ -237,7 +237,7 @@ func TestUnlike_Idempotent(t *testing.T) {
 func TestHasLiked(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("u", testPass)
-	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "", 0, 0, 0, 0)
 
 	if s.HasLiked(u.ID, v.ID) {
 		t.Fatal("should not be liked yet")
@@ -251,8 +251,8 @@ func TestHasLiked(t *testing.T) {
 func TestBatchHasLiked(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("u", testPass)
-	v1, _ := s.CreateVideo(u.ID, "v1", "/uploads/v1.mp4", "")
-	v2, _ := s.CreateVideo(u.ID, "v2", "/uploads/v2.mp4", "")
+	v1, _ := s.CreateVideo(u.ID, "v1", "/uploads/v1.mp4", "", 0, 0, 0, 0)
+	v2, _ := s.CreateVideo(u.ID, "v2", "/uploads/v2.mp4", "", 0, 0, 0, 0)
 	s.Like(u.ID, v1.ID)
 
 	m := s.BatchHasLiked(u.ID, []int64{v1.ID, v2.ID})
@@ -269,7 +269,7 @@ func TestBatchHasLiked(t *testing.T) {
 func TestAddComment(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("u", testPass)
-	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "", 0, 0, 0, 0)
 
 	c, err := s.AddComment(v.ID, u.ID, "hello")
 	if err != nil || c.Content != "hello" {
@@ -285,7 +285,7 @@ func TestAddComment(t *testing.T) {
 func TestListComments_Order(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("u", testPass)
-	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "", 0, 0, 0, 0)
 	s.AddComment(v.ID, u.ID, "first")
 	s.AddComment(v.ID, u.ID, "second")
 
@@ -301,7 +301,7 @@ func TestListComments_Order(t *testing.T) {
 func TestAddComment_EmptyContent(t *testing.T) {
 	s := New()
 	u, _ := s.CreateUser("u", testPass)
-	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/uploads/v.mp4", "", 0, 0, 0, 0)
 	_, err := s.AddComment(v.ID, u.ID, "")
 	if err != ErrInvalid {
 		t.Fatalf("expected ErrInvalid, got %v", err)
@@ -365,9 +365,9 @@ func TestFollowingFeed(t *testing.T) {
 	bob, _ := s.CreateUser("bob", testPass)
 	carol, _ := s.CreateUser("carol", testPass)
 
-	s.CreateVideo(alice.ID, "a1", "/uploads/a1.mp4", "")
-	s.CreateVideo(bob.ID, "b1", "/uploads/b1.mp4", "")
-	s.CreateVideo(carol.ID, "c1", "/uploads/c1.mp4", "")
+	s.CreateVideo(alice.ID, "a1", "/uploads/a1.mp4", "", 0, 0, 0, 0)
+	s.CreateVideo(bob.ID, "b1", "/uploads/b1.mp4", "", 0, 0, 0, 0)
+	s.CreateVideo(carol.ID, "c1", "/uploads/c1.mp4", "", 0, 0, 0, 0)
 
 	s.Follow(bob.ID, alice.ID)
 

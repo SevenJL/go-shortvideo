@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -191,9 +192,9 @@ type busProducer struct {
 	topic string
 }
 
-func (p *busProducer) Publish(_ context.Context, e like.LikeEvent) error {
+func (p *busProducer) Publish(ctx context.Context, e like.LikeEvent) error {
 	data, _ := json.Marshal(e)
-	return p.bus.Publish(context.Background(), p.topic, data)
+	return p.bus.Publish(ctx, p.topic, data)
 }
 
 type fanoutPublisher struct {
@@ -204,7 +205,9 @@ type fanoutPublisher struct {
 func (p *fanoutPublisher) PublishFanout(authorID, videoID, tsMilli int64) {
 	task := feed.FanoutTask{AuthorID: authorID, VideoID: videoID, TsMilli: tsMilli}
 	data, _ := json.Marshal(task)
-	_ = p.bus.Publish(context.Background(), p.topic, data)
+	if err := p.bus.Publish(context.Background(), p.topic, data); err != nil {
+		log.Printf("fanout publish failed: authorID=%d videoID=%d err=%v", authorID, videoID, err)
+	}
 }
 
 type storeHydrator struct{ s *store.Store }
@@ -257,6 +260,7 @@ type likeRecord struct {
 }
 
 type memLikeRepo struct {
+	mu      sync.Mutex
 	records map[[2]int64]*likeRecord
 	stats   map[int64]int64
 }
@@ -269,6 +273,8 @@ func newMemLikeRepo() *memLikeRepo {
 }
 
 func (r *memLikeRepo) UpsertLike(_ context.Context, uid, vid, ts int64, liked bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	key := [2]int64{uid, vid}
 	if rec := r.records[key]; rec == nil {
 		r.records[key] = &likeRecord{liked: liked, updatedAt: ts}
@@ -280,6 +286,8 @@ func (r *memLikeRepo) UpsertLike(_ context.Context, uid, vid, ts int64, liked bo
 }
 
 func (r *memLikeRepo) ApplyCountDeltas(_ context.Context, deltas map[int64]int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for vid, delta := range deltas {
 		r.stats[vid] += delta
 		if r.stats[vid] < 0 {

@@ -2,6 +2,7 @@ package like
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -70,6 +71,12 @@ func (a *CounterAggregator) flush(ctx context.Context) {
 		shard := int(vid % CounterShards)
 		pipe.IncrBy(ctx, CountShardKey(vid, shard), delta)
 	}
-	_, _ = pipe.Exec(ctx)
-	// 生产环境：Exec 失败时可考虑把 batch 退回 deltas 重试
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("aggregator flush failed (retrying next cycle): %v", err)
+		a.mu.Lock()
+		for vid, delta := range batch {
+			a.deltas[vid] += delta
+		}
+		a.mu.Unlock()
+	}
 }

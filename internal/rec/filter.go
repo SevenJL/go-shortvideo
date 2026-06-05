@@ -16,7 +16,8 @@ func FilterSeen(ctx context.Context, store *Store, userID int64, videos []Scored
 	}
 	seen, err := store.IsSeen(ctx, userID, ids)
 	if err != nil {
-		return videos // Redis 故障时降级：不过滤
+		// Redis 故障时保守处理：返回空，避免重复推荐已看内容
+		return nil
 	}
 	out := make([]ScoredVideo, 0, len(videos))
 	for _, v := range videos {

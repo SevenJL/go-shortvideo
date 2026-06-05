@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>ShortVideo - 抖音风格Demo</title>
+<style>
+:root{--bg:#000;--txt:#fff;--sub:#aaa;--pink:#ff0050;--cyan:#00f2ea}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--txt);overflow:hidden;height:100dvh;width:100vw;user-select:none;-webkit-user-select:none}
+#app{max-width:430px;margin:0 auto;height:100dvh;position:relative;background:var(--bg);overflow:hidden}
+
+/* ====== TOP NAV ====== */
+.topnav{position:absolute;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;padding:10px 12px;gap:0}
+.topnav .tab{flex:1;text-align:center;font-size:15px;font-weight:500;color:var(--sub);cursor:pointer;padding:6px 0;position:relative;transition:color .2s}
+.topnav .tab.on{color:var(--txt);font-weight:700;font-size:16px}
+.topnav .tab.on::after{content:'';position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:24px;height:3px;background:var(--txt);border-radius:2px}
+.topnav .search{width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;margin-left:4px}
+
+/* ====== VIDEO SWIPER ====== */
+.swiper{height:100%;overflow-y:scroll;scroll-snap-type:y mandatory;scroll-behavior:smooth}
+.swiper::-webkit-scrollbar{display:none}
+.swiper-page{height:100dvh;scroll-snap-align:start;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+/* Video placeholder — colorful gradient simulating video content */
+.vid-bg{position:absolute;inset:0}
+.vid-bg.g1{background:linear-gradient(160deg,#1a1a2e 0%,#16213e 40%,#0f3460 70%,#1a1a2e 100%)}
+.vid-bg.g2{background:linear-gradient(160deg,#2d1b2e 0%,#1a1a3e 40%,#1b3a4b 70%,#1a1a1a 100%)}
+.vid-bg.g3{background:linear-gradient(160deg,#1b2e1a 0%,#0f2816 40%,#1a3a2b 70%,#162013 100%)}
+.vid-bg.g4{background:linear-gradient(160deg,#2e1a1a 0%,#3e1a2b 40%,#4b1a3a 70%,#1a1a2e 100%)}
+.vid-bg.g5{background:linear-gradient(160deg,#1a1a3e 0%,#2b1a3e 40%,#1a2b4b 70%,#0f1628 100%)}
+
+/* Video center content */
+.vid-center{position:relative;z-index:2;text-align:center}
+.vid-emoji{font-size:72px;filter:drop-shadow(0 4px 20px rgba(0,0,0,.5));animation:float 3s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+.vid-time{position:absolute;top:10px;right:10px;font-size:11px;color:rgba(255,255,255,.6);background:rgba(0,0,0,.4);padding:2px 6px;border-radius:4px;z-index:3}
+.vid-mute{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10;font-size:48px;opacity:0;transition:opacity .3s;pointer-events:none}
+.vid-mute.show{opacity:1}
+
+/* Double-tap heart */
+.heart-burst{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) scale(0);z-index:20;pointer-events:none;transition:transform .3s cubic-bezier(.18,.89,.32,1.28),opacity .3s}
+.heart-burst.fire{transform:translate(-50%,-50%) scale(1);opacity:0;transition:transform .1s cubic-bezier(.18,.89,.32,1.28),opacity .5s}
+.heart-burst svg{width:100px;height:100px;filter:drop-shadow(0 0 20px rgba(255,0,80,.6))}
+
+/* ====== RIGHT SIDEBAR ====== */
+.sidebar{position:absolute;right:10px;bottom:130px;z-index:20;display:flex;flex-direction:column;align-items:center;gap:22px}
+.side-item{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer}
+.side-avatar{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;position:relative;border:2px solid var(--txt)}
+.side-avatar .plus{position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);width:20px;height:20px;border-radius:50%;background:var(--pink);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.side-avatar.g1{background:linear-gradient(135deg,#ff6b6b,#ee5a24)}
+.side-avatar.g2{background:linear-gradient(135deg,#a29bfe,#6c5ce7)}
+.side-avatar.g3{background:linear-gradient(135deg,#fd79a8,#e84393)}
+.side-avatar.g4{background:linear-gradient(135deg,#00cec9,#0984e3)}
+.side-icon{width:34px;height:34px;display:flex;align-items:center;justify-content:center}
+.side-icon svg{width:32px;height:32px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
+.side-count{font-size:11px;font-weight:600;color:var(--txt);text-shadow:0 1px 3px rgba(0,0,0,.5)}
+.side-item.liked .side-icon svg{color:var(--pink)}
+/* Music disc */
+.music-disc{width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;animation:spin 4s linear infinite;margin-top:8px}
+.music-disc .inner{width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.3)}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ====== BOTTOM INFO ====== */
+.vid-info{position:absolute;bottom:110px;left:12px;right:70px;z-index:20}
+.vid-info .uname{font-weight:700;font-size:15px;margin-bottom:4px;text-shadow:0 1px 3px rgba(0,0,0,.5)}
+.vid-info .caption{font-size:13px;line-height:1.4;color:#eee;margin-bottom:4px;text-shadow:0 1px 2px rgba(0,0,0,.5);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.vid-info .hashtag{color:#ccc;font-size:12px;font-weight:500}
+.vid-info .music{display:flex;align-items:center;gap:4px;margin-top:6px;font-size:12px;color:var(--txt)}
+.vid-info .music .marquee{overflow:hidden;white-space:nowrap;max-width:180px}
+.vid-info .music .marquee span{animation:marq 6s linear infinite;display:inline-block;padding-right:30px}
+@keyframes marq{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+
+/* ====== BOTTOM TAB BAR ====== */
+.btmbar{position:absolute;bottom:0;left:0;right:0;z-index:50;display:flex;justify-content:space-around;align-items:flex-end;padding:4px 8px 18px;background:linear-gradient(0deg,rgba(0,0,0,.9) 0%,rgba(0,0,0,.6) 60%,transparent 100%)}
+.btm-item{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:var(--sub);cursor:pointer;padding:4px 6px;transition:color .2s}
+.btm-item.on{color:var(--txt)}
+.btm-item svg{width:22px;height:22px}
+.btm-item .plus-btn{width:38px;height:26px;background:linear-gradient(135deg,var(--pink),var(--cyan));border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff}
+
+/* ====== AUTH SCREEN ====== */
+.auth-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.94);z-index:200;align-items:center;justify-content:center;flex-direction:column}
+.auth-overlay.on{display:flex}
+.auth-card{width:320px;padding:28px 24px;border-radius:16px;background:#12121a;text-align:center}
+.auth-card h2{font-size:22px;margin-bottom:4px}
+.auth-card .sub{color:var(--sub);font-size:12px;margin-bottom:18px}
+.auth-card input{width:100%;padding:12px;margin:6px 0;border-radius:8px;border:1px solid #2a2a35;background:#1a1a25;color:var(--txt);font-size:14px;outline:none;transition:border .2s}
+.auth-card input:focus{border-color:var(--pink)}
+.auth-card .btn{width:100%;padding:12px;margin-top:10px;border-radius:24px;border:none;font-size:14px;font-weight:600;cursor:pointer}
+.auth-card .btn-p{background:var(--pink);color:#fff}
+.auth-card .btn-s{background:transparent;color:var(--pink);border:1px solid var(--pink)!important;margin-top:6px}
+.auth-card .tog{color:var(--sub);margin-top:12px;font-size:12px;cursor:pointer}
+.auth-card .tog span{color:var(--pink)}
+.auth-close{position:absolute;top:20px;right:24px;font-size:26px;cursor:pointer;color:var(--txt);z-index:10}
+
+/* ====== COMMENTS PANEL ====== */
+.cpanel{display:none;position:fixed;bottom:0;left:0;right:0;max-width:430px;margin:0 auto;height:70%;background:#12121a;border-radius:16px 16px 0 0;z-index:150;flex-direction:column}
+.cpanel.on{display:flex}
+.cpanel .ch{display:flex;justify-content:center;align-items:center;padding:14px;border-bottom:1px solid #222;position:relative}
+.cpanel .ch .title{font-size:15px;font-weight:600}
+.cpanel .ch .close{position:absolute;right:14px;font-size:20px;cursor:pointer;color:var(--sub)}
+.cpanel .clist{flex:1;overflow-y:auto;padding:12px 16px}
+.cpanel .clist .cmt{display:flex;gap:10px;margin-bottom:14px}
+.cpanel .clist .cmt .cav{width:36px;height:36px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px}
+.cpanel .clist .cmt .cav.c1{background:linear-gradient(135deg,#ff6b6b,#ee5a24)}
+.cpanel .clist .cmt .cav.c2{background:linear-gradient(135deg,#a29bfe,#6c5ce7)}
+.cpanel .clist .cmt .cb .cun{font-size:12px;font-weight:600;margin-bottom:2px}
+.cpanel .clist .cmt .cb .cct{font-size:13px;color:#ccc;line-height:1.4}
+.cpanel .clist .cmt .cb .ctime{font-size:10px;color:#666;margin-top:2px}
+.cpanel .cinput{display:flex;padding:10px 14px 20px;border-top:1px solid #222;gap:8px;align-items:center}
+.cpanel .cinput input{flex:1;padding:10px 14px;border-radius:20px;border:1px solid #2a2a35;background:#1a1a25;color:var(--txt);font-size:13px;outline:none}
+.cpanel .cinput button{background:var(--pink);color:#fff;border:none;padding:10px 16px;border-radius:20px;cursor:pointer;font-size:13px;font-weight:600;flex-shrink:0}
+
+/* ====== UPLOAD ====== */
+.upload-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.94);z-index:200;align-items:center;justify-content:center;flex-direction:column}
+.upload-overlay.on{display:flex}
+.upload-card{width:320px;padding:24px;border-radius:16px;background:#12121a;text-align:center}
+.upload-card h3{font-size:18px;margin-bottom:14px}
+.upload-card input[type=file]{color:var(--txt);margin:10px 0;font-size:13px}
+.upload-card input[type=file]::file-selector-button{background:var(--pink);color:#fff;border:none;padding:8px 16px;border-radius:16px;cursor:pointer;margin-right:10px}
+.upload-card input[type=text]{width:100%;padding:10px;margin:8px 0;border-radius:8px;border:1px solid #2a2a35;background:#1a1a25;color:var(--txt);font-size:14px;outline:none}
+.upload-card .up-close{position:absolute;top:16px;right:16px;font-size:22px;cursor:pointer;color:var(--txt)}
+
+/* ====== PROFILE ====== */
+.pscreen{display:none;flex-direction:column;height:100%;overflow-y:auto;padding:16px 16px 60px}
+.pscreen.on{display:flex}
+.pscreen .phd{display:flex;align-items:center;gap:20px;padding:12px 0 16px}
+.pscreen .phd .avt{width:76px;height:76px;border-radius:50%;background:linear-gradient(135deg,var(--pink),var(--cyan));display:flex;align-items:center;justify-content:center;font-size:32px;flex-shrink:0}
+.pscreen .phd .info{flex:1}
+.pscreen .phd .info h3{font-size:20px;margin-bottom:4px}
+.pscreen .phd .info .uid{font-size:12px;color:var(--sub)}
+.pscreen .st{display:flex;gap:24px;margin:12px 0}
+.pscreen .st .s{text-align:center}
+.pscreen .st .s .n{font-size:18px;font-weight:700}
+.pscreen .st .s .l{font-size:11px;color:var(--sub)}
+.pscreen .bio{font-size:13px;color:#ccc;margin-bottom:4px}
+.pscreen .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;margin-top:12px}
+.pscreen .grid .gt{aspect-ratio:9/16;position:relative;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:28px}
+.pscreen .lo{margin:30px auto;padding:10px 40px;border:1px solid var(--pink);border-radius:20px;color:var(--pink);cursor:pointer;font-size:13px;text-align:center}
+
+/* Global toast */
+.toast{position:fixed;top:80px;left:50%;transform:translateX(-50%);background:rgba(255,0,80,.85);color:#fff;padding:8px 22px;border-radius:16px;font-size:13px;z-index:300;pointer-events:none;opacity:0;transition:opacity .3s}
+.toast.show{opacity:1}
+.loading{text-align:center;padding:60px 20px;color:var(--sub)}
+.loading .sp{width:28px;height:28px;border:3px solid #333;border-top-color:var(--pink);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 10px}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ====== TOP NAV ====== -->
+<div class="topnav">
+  <div class="tab on" data-tab="rec" onclick="switchTab('rec')">推荐</div>
+  <div class="tab" data-tab="feed" onclick="switchTab('feed')">关注</div>
+  <div class="search" onclick="showAuth()">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+  </div>
+</div>
+
+<!-- ====== VIDEO SWIPER ====== -->
+<div class="swiper" id="swiper">
+  <div class="loading"><div class="sp"></div>加载中</div>
+</div>
+
+<!-- ====== BOTTOM TAB BAR ====== -->
+<div class="btmbar">
+  <div class="btm-item on" data-tab="rec" onclick="switchTab('rec')">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+    <span>首页</span>
+  </div>
+  <div class="btm-item" data-tab="feed" onclick="switchTab('feed')">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+    <span>朋友</span>
+  </div>
+  <div class="btm-item" onclick="showUpload()">
+    <div class="plus-btn">＋</div>
+  </div>
+  <div class="btm-item" onclick="switchTab('square')">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L12 15.45 7.77 18l1.12-4.81-3.73-3.23 4.92-.42L12 5l1.92 4.53 4.92.42-3.73 3.23L16.23 18z"/></svg>
+    <span>广场</span>
+  </div>
+  <div class="btm-item" onclick="showProfile()">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+    <span>我</span>
+  </div>
+</div>
+
+<!-- ====== AUTH OVERLAY ====== -->
+<div class="auth-overlay" id="authOverlay">
+  <span class="auth-close" onclick="hideAuth()">✕</span>
+  <div class="auth-card">
+    <h2 id="authTitle">登录</h2>
+    <p class="sub">短视频 · 记录美好生活</p>
+    <input id="au" placeholder="用户名">
+    <input id="ap" type="password" placeholder="密码(至少6位)">
+    <button class="btn btn-p" onclick="doAuth()" id="authBtn">登 录</button>
+    <div class="tog" onclick="toggleAuth()">还没有账号？<span>立即注册</span></div>
+  </div>
+</div>
+
+<!-- ====== UPLOAD OVERLAY ====== -->
+<div class="upload-overlay" id="uploadOverlay">
+  <span class="up-close" onclick="closeUpload()">✕</span>
+  <div class="upload-card">
+    <h3>发布视频</h3>
+    <input type="file" id="uf" accept="video/*">
+    <input type="text" id="ut" placeholder="添加标题...">
+    <button class="btn btn-p" onclick="doUpload()" style="width:100%;margin-top:10px">发布</button>
+  </div>
+</div>
+
+<!-- ====== COMMENTS PANEL ====== -->
+<div class="cpanel" id="cPanel">
+  <div class="ch">
+    <span class="title">评论</span>
+    <span class="close" onclick="closeComments()">✕</span>
+  </div>
+  <div class="clist" id="cList"></div>
+  <div class="cinput">
+    <input id="cInput" placeholder="有爱评论，说点儿好听的~">
+    <button onclick="doComment()">发送</button>
+  </div>
+</div>
+
+<!-- ====== PROFILE SCREEN ====== -->
+<div class="pscreen" id="pScreen">
+  <div class="phd">
+    <div class="avt">👤</div>
+    <div class="info">
+      <h3 id="pName">@username</h3>
+      <div class="uid">ID: --</div>
+    </div>
+  </div>
+  <div class="st">
+    <div class="s"><div class="n" id="pFollowing">0</div><div class="l">关注</div></div>
+    <div class="s"><div class="n" id="pFollowers">0</div><div class="l">粉丝</div></div>
+    <div class="s"><div class="n" id="pLikes">0</div><div class="l">获赞</div></div>
+  </div>
+  <div class="grid" id="pGrid"></div>
+  <div class="lo" onclick="logout()">退出登录</div>
+</div>
+
+<div class="toast" id="toast"></div>
+</div>
+
+<script>
+// ====== STATE ======
+const HOST=window.location.origin;
+let token='',user=null,tab='rec',videos=[],fcursor=0,rcursor=0,cvid=0,isLogin=true;
+const GRADIENTS=['g1','g2','g3','g4','g5'];
+const EMOJIS=['🐱','🌅','🍳','🚴','🎵','🎮','📱','🌟','🔥','💡','🎨','🍕','🏀','✈️','🌊','🎸'];
+const AVATARS=['g1','g2','g3','g4'];
+
+// ====== HELPERS ======
+const $=id=>document.getElementById(id);
+const ah=()=>token?{'Authorization':'Bearer '+token}:{};
+const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
+const fc=n=>n>=1e4?(n/1e4).toFixed(1)+'w':n>=1e3?(n/1e3).toFixed(1)+'k':String(n);
+const gv=v=>v.id||v.video_id||0;
+const ga=v=>v.author_id||0;
+const rnd=(a)=>a[Math.floor(Math.random()*a.length)];
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000)}
+
+// ====== AUTH ======
+function showAuth(){$('authOverlay').classList.add('on')}
+function hideAuth(){$('authOverlay').classList.remove('on')}
+function toggleAuth(){
+  isLogin=!isLogin;
+  $('authTitle').textContent=isLogin?'登录':'注册';
+  $('authBtn').textContent=isLogin?'登 录':'注 册';
+  document.querySelector('#authOverlay .tog').innerHTML=isLogin?'还没有账号？<span>立即注册</span>':'已有账号？<span>去登录</span>';
+}
+async function doAuth(){
+  const u=$('au').value.trim(),p=$('ap').value;
+  if(!u||!p){toast('请输入用户名和密码');return}
+  if(isLogin){
+    const r=await fetch(HOST+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json();
+    if(d.code!==0){toast(d.msg);return}
+    token=d.data.token;user=d.data.user;hideAuth();loadProfile();switchTab(tab);toast('欢迎回来，'+user.username);
+  }else{
+    if(p.length<6){toast('密码至少6位');return}
+    const r=await fetch(HOST+'/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json();
+    if(d.code!==0){toast(d.msg);return}
+    toast('注册成功！请登录');toggleAuth();
+  }
+}
+function logout(){token='';user=null;$('pScreen').classList.remove('on');switchTab('square');toast('已退出')}
+
+// ====== TABS ======
+async function switchTab(t){
+  tab=t;
+  document.querySelectorAll('.topnav .tab,.btm-item').forEach(e=>e.classList.remove('on'));
+  document.querySelectorAll(`[data-tab="${t}"]`).forEach(e=>e.classList.add('on'));
+  $('pScreen').classList.remove('on');
+  $('swiper').innerHTML='<div class="loading"><div class="sp"></div>加载中...</div>';
+  if(t==='feed'){
+    if(!token){showAuth();loadSquare();return}
+    fcursor=0;await loadFeed();
+  }else if(t==='rec'){
+    if(!token){showAuth();loadSquare();return}
+    rcursor=0;await loadRec();
+  }else await loadSquare();
+}
+
+async function loadFeed(){
+  const r=await fetch(HOST+`/api/feed?limit=10&max_id=${fcursor}`,{headers:ah()});
+  const d=await r.json();
+  if(d.code!==0||!(d.data?.items||[]).length){$('swiper').innerHTML='<div class="loading">关注流暂无内容<br><small style="color:#888;font-size:12px">去广场关注一些用户吧</small></div>';return}
+  videos=d.data.items;fcursor=d.data.next_cursor||0;render();
+}
+async function loadRec(){
+  const r=await fetch(HOST+`/api/rec?cursor=${rcursor}`,{headers:ah()});
+  const d=await r.json();
+  if(d.code!==0||!(d.data?.items||[]).length){$('swiper').innerHTML='<div class="loading">暂无推荐<br><small style="color:#888;font-size:12px">试试给视频点赞吧</small></div>';return}
+  videos=d.data.items;rcursor=d.data.next_cursor||0;render();
+}
+async function loadSquare(){
+  const r=await fetch(HOST+'/api/videos?limit=15');
+  const d=await r.json();videos=d.data.items||[];render();
+}
+
+// ====== RENDER ======
+function render(){
+  if(!videos.length){$('swiper').innerHTML='<div class="loading">暂无视频<div style="font-size:12px;color:#888;margin-top:6px">点击 ＋ 发布</div></div>';return}
+  $('swiper').innerHTML=videos.map((v,i)=>{
+    let vid=gv(v),aid=ga(v),liked=v.liked||false,grad=rnd(GRADIENTS),emoji=rnd(EMOJIS),av=rnd(AVATARS);
+    return `<div class="swiper-page" id="page-${vid}" ondblclick="doubleLike(${vid},${i},event)">
+      <div class="vid-bg ${grad}"></div>
+      <div class="vid-center"><div class="vid-emoji">${emoji}</div></div>
+      <div class="vid-time">${v.duration||15}s</div>
+      <div class="heart-burst" id="heart-${vid}">
+        <svg viewBox="0 0 24 24" fill="#ff0050"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+      </div>
+      <div class="sidebar">
+        <div class="side-item" onclick="${token&&user&&aid!==user.id?`doFollow(${aid},this)`:'showAuth()'}">
+          <div class="side-avatar ${av}">👤<div class="plus">＋</div></div>
+        </div>
+        <div class="side-item${liked?' liked':''}" onclick="doLike(${vid},${i})">
+          <div class="side-icon"><svg viewBox="0 0 24 24" fill="${liked?'#ff0050':'none'}" stroke="${liked?'#ff0050':'#fff'}" stroke-width="1.8"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></div>
+          <span class="side-count">${fc(v.like_count||0)}</span>
+        </div>
+        <div class="side-item" onclick="openComments(${vid})">
+          <div class="side-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></div>
+          <span class="side-count">${fc(v.comment_count||0)}</span>
+        </div>
+        <div class="side-item">
+          <div class="side-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></div>
+          <span class="side-count">分享</span>
+        </div>
+        <div class="music-disc"><div class="inner"></div></div>
+      </div>
+      <div class="vid-info">
+        <div class="uname">@user${aid}</div>
+        <div class="caption">${esc(v.title||'无标题')}</div>
+        <div class="music">♪ <div class="marquee"><span>原声 · user${aid} · ShortVideo </span><span>原声 · user${aid} · ShortVideo </span></div></div>
+      </div>
+    </div>`;
+  }).join('');
+  // Scroll to top
+  $('swiper').scrollTop=0;
+}
+
+// ====== LIKE ======
+async function doLike(vid,idx){
+  if(!token){showAuth();return}
+  const r=await fetch(HOST+`/api/videos/${vid}/like`,{method:'POST',headers:ah()});
+  const d=await r.json();
+  if(d.code===0){videos[idx].liked=d.data.liked;videos[idx].like_count=d.data.like_count;render();toast(d.data.changed?'❤️ 点赞':'已点赞');}
+}
+function doubleLike(vid,idx,e){
+  if(!token){showAuth();return}
+  const hb=$('heart-'+vid);if(!hb)return;
+  hb.classList.add('fire');
+  setTimeout(()=>hb.classList.remove('fire'),600);
+  doLike(vid,idx);
+}
+
+// ====== FOLLOW ======
+async function doFollow(uid,el){
+  if(!token){showAuth();return}
+  const r=await fetch(HOST+`/api/users/${uid}/follow`,{method:'POST',headers:ah()});
+  const d=await r.json();
+  if(d.code===0){el.querySelector('.plus').textContent='✓';el.querySelector('.plus').style.background='#888';toast('已关注');}
+}
+
+// ====== COMMENTS ======
+async function openComments(vid){
+  cvid=vid;
+  const r=await fetch(HOST+`/api/videos/${vid}/comments`);
+  const d=await r.json();const items=d.data?.items||[];
+  $('cList').innerHTML=items.length?items.map(c=>`<div class="cmt"><div class="cav ${rnd(AVATARS)}">👤</div><div class="cb"><div class="cun">用户${c.user_id}</div><div class="cct">${esc(c.content)}</div><div class="ctime">刚刚</div></div></div>`).join(''):'<div style="text-align:center;color:#888;padding:30px">暂无评论，来说两句吧</div>';
+  $('cPanel').classList.add('on');
+}
+function closeComments(){$('cPanel').classList.remove('on')}
+async function doComment(){
+  if(!token){showAuth();return}
+  const ct=$('cInput').value.trim();if(!ct)return;
+  const r=await fetch(HOST+`/api/videos/${cvid}/comments`,{method:'POST',headers:{...ah(),'Content-Type':'application/json'},body:JSON.stringify({content:ct})});
+  const d=await r.json();
+  if(d.code===0){$('cInput').value='';openComments(cvid);toast('评论成功');}
+}
+
+// ====== UPLOAD ======
+function showUpload(){if(!token){showAuth();return}$('uploadOverlay').classList.add('on')}
+function closeUpload(){$('uploadOverlay').classList.remove('on')}
+async function doUpload(){
+  const f=$('uf').files[0];if(!f){toast('请选择视频');return}
+  const fd=new FormData();fd.append('file',f);
+  const r=await fetch(HOST+'/api/upload',{method:'POST',headers:{'Authorization':'Bearer '+token},body:fd});
+  const d=await r.json();
+  if(d.code===0){closeUpload();switchTab('square');toast(`发布成功! ${d.data.duration||0}s ${d.data.width||0}x${d.data.height||0}`);}
+  else toast(d.msg);
+}
+
+// ====== PROFILE ======
+async function showProfile(){
+  if(!user){showAuth();return}
+  document.querySelectorAll('.topnav .tab,.btm-item').forEach(e=>e.classList.remove('on'));
+  $('pScreen').classList.add('on');
+  loadProfile();
+}
+async function loadProfile(){
+  if(!user)return;
+  const r=await fetch(HOST+`/api/users/${user.id}`);
+  const d=await r.json();
+  if(d.code!==0)return;
+  $('pName').textContent='@'+d.data.user.username;
+  $('pFollowing').textContent=d.data.following_count||0;
+  $('pFollowers').textContent=d.data.follower_count||0;
+  const vr=await fetch(HOST+`/api/users/${user.id}/videos?limit=12`);
+  const vd=await vr.json();
+  let likes=0;(vd.data?.items||[]).forEach(v=>likes+=v.like_count||0);
+  $('pLikes').textContent=fc(likes);
+  $('pGrid').innerHTML=(vd.data?.items||[]).map(v=>`<div class="gt" style="background:${rnd(['#1a1a2e','#16213e','#0f3460','#2d1b2e','#1b2e1a'])};font-size:24px">${rnd(EMOJIS)}</div>`).join('')||'<div class="loading">暂无视频</div>';
+}
+
+// ====== TOUCH/SWIPE ======
+let touchY=0;
+$('swiper').addEventListener('touchstart',e=>{touchY=e.touches[0].clientY});
+$('swiper').addEventListener('touchend',e=>{
+  const dy=touchY-e.changedTouches[0].clientY;
+  if(Math.abs(dy)>50&&$('swiper').scrollTop+$('swiper').clientHeight>=$('swiper').scrollHeight-10){
+    // Load more when reaching bottom
+    if(tab==='rec'&&token)loadRec();
+    else if(tab==='feed'&&token)loadFeed();
+  }
+});
+
+// ====== INIT ======
+$('au').value='alice';$('ap').value='password123';
+loadSquare();
+</script>
+</body>
+</html>

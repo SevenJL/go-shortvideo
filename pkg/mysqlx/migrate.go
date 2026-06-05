@@ -43,11 +43,17 @@ func RunMigrations(db *sql.DB) error {
 			video_id    BIGINT PRIMARY KEY,
 			author_id   BIGINT NOT NULL,
 			title       VARCHAR(255) NOT NULL DEFAULT '',
-			play_url    VARCHAR(512) NOT NULL DEFAULT '',
+			play_url    VARCHAR(512) NOT NULL DEFAULT '' COMMENT '原始/默认播放地址',
 			cover_url   VARCHAR(512) NOT NULL DEFAULT '',
-			status      TINYINT NOT NULL DEFAULT 1 COMMENT '0=转码中 1=已发布 2=已删除',
+			duration    INT NOT NULL DEFAULT 0 COMMENT '视频时长(秒)',
+			width       INT NOT NULL DEFAULT 0,
+			height      INT NOT NULL DEFAULT 0,
+			file_size   BIGINT NOT NULL DEFAULT 0,
+			status      TINYINT NOT NULL DEFAULT 1 COMMENT '0=上传中 1=转码中 2=已完成 3=失败',
 			created_at  BIGINT NOT NULL COMMENT '毫秒时间戳',
-			INDEX idx_author (author_id, created_at)
+			updated_at  BIGINT NOT NULL DEFAULT 0 COMMENT '毫秒时间戳',
+			INDEX idx_author (author_id, created_at),
+			INDEX idx_status (status, created_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 

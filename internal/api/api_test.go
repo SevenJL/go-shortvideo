@@ -238,8 +238,8 @@ func TestPublishVideo_NoAuth(t *testing.T) {
 func TestListVideos_API(t *testing.T) {
 	r, s := newTestServer(t)
 	u, _ := s.CreateUser("alice", "password123")
-	s.CreateVideo(u.ID, "v1", "/v1.mp4", "")
-	s.CreateVideo(u.ID, "v2", "/v2.mp4", "")
+	s.CreateVideo(u.ID, "v1", "/v1.mp4", "", 0, 0, 0, 0)
+	s.CreateVideo(u.ID, "v2", "/v2.mp4", "", 0, 0, 0, 0)
 	w := do(t, r, http.MethodGet, "/api/videos?limit=10", nil, 0)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
@@ -254,7 +254,7 @@ func TestListVideos_API(t *testing.T) {
 func TestGetVideo_WithLiked(t *testing.T) {
 	r, s := newTestServer(t)
 	u, _ := s.CreateUser("u", "password123")
-	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "", 0, 0, 0, 0)
 	s.Like(u.ID, v.ID)
 	w := do(t, r, http.MethodGet, fmt.Sprintf("/api/videos/%d", v.ID), nil, u.ID)
 	if w.Code != http.StatusOK {
@@ -271,7 +271,7 @@ func TestGetVideo_WithLiked(t *testing.T) {
 func TestLike_API(t *testing.T) {
 	r, s := newTestServer(t)
 	u, _ := s.CreateUser("u", "password123")
-	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "", 0, 0, 0, 0)
 	w := do(t, r, http.MethodPost, fmt.Sprintf("/api/videos/%d/like", v.ID), nil, u.ID)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
@@ -286,7 +286,7 @@ func TestLike_API(t *testing.T) {
 func TestUnlike_API(t *testing.T) {
 	r, s := newTestServer(t)
 	u, _ := s.CreateUser("u", "password123")
-	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "", 0, 0, 0, 0)
 	s.Like(u.ID, v.ID)
 	w := do(t, r, http.MethodDelete, fmt.Sprintf("/api/videos/%d/like", v.ID), nil, u.ID)
 	if w.Code != http.StatusOK {
@@ -299,7 +299,7 @@ func TestUnlike_API(t *testing.T) {
 func TestAddComment_API(t *testing.T) {
 	r, s := newTestServer(t)
 	u, _ := s.CreateUser("u", "password123")
-	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "", 0, 0, 0, 0)
 	w := do(t, r, http.MethodPost, fmt.Sprintf("/api/videos/%d/comments", v.ID),
 		map[string]string{"content": "nice!"}, u.ID)
 	if w.Code != http.StatusOK {
@@ -310,7 +310,7 @@ func TestAddComment_API(t *testing.T) {
 func TestListComments_API(t *testing.T) {
 	r, s := newTestServer(t)
 	u, _ := s.CreateUser("u", "password123")
-	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "")
+	v, _ := s.CreateVideo(u.ID, "v", "/v.mp4", "", 0, 0, 0, 0)
 	s.AddComment(v.ID, u.ID, "first")
 	s.AddComment(v.ID, u.ID, "second")
 	w := do(t, r, http.MethodGet, fmt.Sprintf("/api/videos/%d/comments", v.ID), nil, 0)
@@ -346,7 +346,7 @@ func TestFollowingFeed_API(t *testing.T) {
 	r, s := newTestServer(t)
 	alice, _ := s.CreateUser("alice", "password123")
 	bob, _ := s.CreateUser("bob", "password123")
-	s.CreateVideo(alice.ID, "a", "/a.mp4", "")
+	s.CreateVideo(alice.ID, "a", "/a.mp4", "", 0, 0, 0, 0)
 	s.Follow(bob.ID, alice.ID)
 	w := do(t, r, http.MethodGet, "/api/feed?limit=10", nil, bob.ID)
 	if w.Code != http.StatusOK {
@@ -365,8 +365,8 @@ func TestFollowingFeed_NoAuth(t *testing.T) {
 func TestListUserVideos_API(t *testing.T) {
 	r, s := newTestServer(t)
 	u, _ := s.CreateUser("u", "password123")
-	s.CreateVideo(u.ID, "v1", "/v1.mp4", "")
-	s.CreateVideo(u.ID, "v2", "/v2.mp4", "")
+	s.CreateVideo(u.ID, "v1", "/v1.mp4", "", 0, 0, 0, 0)
+	s.CreateVideo(u.ID, "v2", "/v2.mp4", "", 0, 0, 0, 0)
 	w := do(t, r, http.MethodGet, fmt.Sprintf("/api/users/%d/videos", u.ID), nil, 0)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
@@ -377,7 +377,7 @@ func TestListVideos_Pagination(t *testing.T) {
 	r, s := newTestServer(t)
 	u, _ := s.CreateUser("u", "password123")
 	for i := 0; i < 5; i++ {
-		s.CreateVideo(u.ID, fmt.Sprintf("v%d", i), "/x.mp4", "")
+		s.CreateVideo(u.ID, fmt.Sprintf("v%d", i), "/x.mp4", "", 0, 0, 0, 0)
 	}
 	w1 := do(t, r, http.MethodGet, "/api/videos?limit=3", nil, 0)
 	m1 := parseBody(t, w1)

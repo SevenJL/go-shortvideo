@@ -31,6 +31,7 @@ func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService,
 	r.GET("/api/users/:id/videos", h.ListUserVideos)
 	r.GET("/api/videos", h.ListVideos)
 	r.GET("/api/videos/:id", h.GetVideo)
+	r.GET("/api/videos/:id/status", h.VideoStatus)
 	r.GET("/api/videos/:id/comments", h.ListComments)
 
 	// 鉴权组
@@ -50,6 +51,8 @@ func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService,
 
 	// 静态文件
 	r.Static("/uploads", uploadDir)
+	r.Static("/web", "./web")
+	r.GET("/", func(c *gin.Context) { c.Redirect(302, "/web/demo.html") })
 
 	return r
 }

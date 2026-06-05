@@ -25,6 +25,7 @@ type Store struct {
 	mu sync.RWMutex
 
 	users    map[int64]*model.User
+	userByName map[string]*model.User // username → user, O(1) lookup
 	videos   map[int64]*model.Video
 	comments map[int64]*model.Comment
 
@@ -51,6 +52,7 @@ type Store struct {
 func New() *Store {
 	return &Store{
 		users:         make(map[int64]*model.User),
+		userByName:    make(map[string]*model.User),
 		videos:        make(map[int64]*model.Video),
 		comments:      make(map[int64]*model.Comment),
 		userLikes:     make(map[int64]map[int64]struct{}),
@@ -81,20 +83,20 @@ func (s *Store) CreateUser(username, password string) (*model.User, error) {
 	s.userSeq++
 	u := &model.User{ID: s.userSeq, Username: username, PasswordHash: string(hash), CreatedAt: nowMilli()}
 	s.users[u.ID] = u
+	s.userByName[username] = u
 	return u, nil
 }
 
-// GetUserByUsername 通过用户名查找用户（用于登录）。
+// GetUserByUsername 通过用户名查找用户（O(1) 索引，用于登录）。
 func (s *Store) GetUserByUsername(username string) (*model.User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, u := range s.users {
-		if u.Username == username {
-			cp := *u
-			return &cp, nil
-		}
+	u, ok := s.userByName[username]
+	if !ok {
+		return nil, ErrNotFound
 	}
-	return nil, ErrNotFound
+	cp := *u
+	return &cp, nil
 }
 
 // AuthenticateUser 验证用户名和密码，成功返回用户。
@@ -132,8 +134,8 @@ func (s *Store) FollowStats(userID int64) (followingCount int, followerCount int
 
 // ---------------- 视频 ----------------
 
-// CreateVideo 发布视频。
-func (s *Store) CreateVideo(authorID int64, title, playURL, coverURL string) (model.Video, error) {
+// CreateVideo 发布视频。新增 Duration/Width/Height/FileSize/Status 字段。
+func (s *Store) CreateVideo(authorID int64, title, playURL, coverURL string, duration int, width, height int, fileSize int64) (model.Video, error) {
 	if title == "" || playURL == "" {
 		return model.Video{}, ErrInvalid
 	}
@@ -143,12 +145,18 @@ func (s *Store) CreateVideo(authorID int64, title, playURL, coverURL string) (mo
 		return model.Video{}, ErrNotFound
 	}
 	s.videoSeq++
+	status := model.VideoReady // 无转码时直接完成
 	v := &model.Video{
 		ID:        s.videoSeq,
 		AuthorID:  authorID,
 		Title:     title,
 		PlayURL:   playURL,
 		CoverURL:  coverURL,
+		Duration:  duration,
+		Status:    status,
+		Width:     width,
+		Height:    height,
+		FileSize:  fileSize,
 		CreatedAt: nowMilli(),
 	}
 	s.videos[v.ID] = v
@@ -455,10 +463,10 @@ func (s *Store) Seed() {
 	carol, _ := s.CreateUser("carol", "password123")
 
 	// 视频地址为占位 URL;可通过 POST /api/upload 上传真实视频后再发布。
-	s.CreateVideo(alice.ID, "猫咪的一天", "/uploads/sample-1.mp4", "")
-	s.CreateVideo(bob.ID, "海边日落", "/uploads/sample-2.mp4", "")
-	s.CreateVideo(alice.ID, "做一顿简单的早餐", "/uploads/sample-3.mp4", "")
-	s.CreateVideo(carol.ID, "城市夜骑", "/uploads/sample-4.mp4", "")
+	s.CreateVideo(alice.ID, "猫咪的一天", "/uploads/sample-1.mp4", "", 30, 1920, 1080, 0)
+	s.CreateVideo(bob.ID, "海边日落", "/uploads/sample-2.mp4", "", 25, 1920, 1080, 0)
+	s.CreateVideo(alice.ID, "做一顿简单的早餐", "/uploads/sample-3.mp4", "", 45, 1920, 1080, 0)
+	s.CreateVideo(carol.ID, "城市夜骑", "/uploads/sample-4.mp4", "", 60, 1280, 720, 0)
 
 	// carol 关注 alice 和 bob,便于演示关注流
 	_ = s.Follow(carol.ID, alice.ID)

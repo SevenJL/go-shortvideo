@@ -10,16 +10,18 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"shortvideo/pkg/media"
 )
 
-const maxUploadSize = 100 << 20 // 100 MB
+const maxUploadSize = 500 << 20 // 500 MB
 
 func (h *Handler) Upload(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize)
 
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "缺少 file 字段或文件过大"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "缺少 file 字段或文件过大(最大500MB)"})
 		return
 	}
 	defer file.Close()
@@ -35,6 +37,7 @@ func (h *Handler) Upload(c *gin.Context) {
 		return
 	}
 
+	// 保存原始文件
 	name := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
 	dstPath := filepath.Join(h.uploadDir, name)
 	dst, err := os.Create(dstPath)
@@ -42,17 +45,52 @@ func (h *Handler) Upload(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "保存文件失败"})
 		return
 	}
-	defer dst.Close()
+	fileSize, _ := io.Copy(dst, file)
+	dst.Close()
 
-	if _, err := io.Copy(dst, file); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "写入文件失败"})
+	// 提取视频信息 (ffprobe)
+	info, _ := media.Probe(dstPath)
+	duration := 0
+	width, height := 0, 0
+	if info != nil {
+		duration = int(info.Duration)
+		width = info.Width
+		height = info.Height
+	}
+
+	// 提取封面 (ffmpeg)
+	coverName := strings.TrimSuffix(name, ext) + ".jpg"
+	coverPath := filepath.Join(h.uploadDir, coverName)
+	coverURL := ""
+	if err := media.ExtractCover(dstPath, coverPath); err == nil {
+		coverURL = "/uploads/" + coverName
+	}
+
+	playURL := "/uploads/" + name
+
+	// 自动发布视频 (带提取的元信息)
+	uid, _ := requireUser(c) // 鉴权组已保证登录态
+	v, err := h.store.CreateVideo(uid, strings.TrimSuffix(header.Filename, ext),
+		playURL, coverURL, duration, width, height, fileSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
 		return
 	}
 
+	if h.fanoutPub != nil {
+		h.fanoutPub.PublishFanout(uid, v.ID, v.CreatedAt)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
-		"play_url": "/uploads/" + name,
-		"filename": header.Filename,
-		"size":     header.Size,
+		"video_id":  v.ID,
+		"status":    v.Status,
+		"play_url":  playURL,
+		"cover_url": coverURL,
+		"filename":  header.Filename,
+		"file_size": fileSize,
+		"duration":  duration,
+		"width":     width,
+		"height":    height,
 	}})
 }
 
