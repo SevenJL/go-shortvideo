@@ -11,8 +11,8 @@ import (
 	"shortvideo/internal/store"
 )
 
-func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher) *gin.Engine {
-	h := NewHandler(s, uploadDir, jwtSecret, likeSvc, feedSvc, recSvc, fanoutPub)
+func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher, transcodePub TranscodePublisher) *gin.Engine {
+	h := NewHandler(s, uploadDir, jwtSecret, likeSvc, feedSvc, recSvc, fanoutPub, transcodePub)
 	jwtAuth := auth.NewJWT(jwtSecret)
 	authMdw := jwtAuth.GinMiddleware()
 

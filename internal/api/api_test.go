@@ -25,7 +25,7 @@ func newTestServer(t *testing.T) (*gin.Engine, *store.Store) {
 	s := store.New()
 	dir := t.TempDir()
 	likeSvc := like.NewMemLikeService(s)
-	return NewRouter(s, dir, testJWTSecret, likeSvc, nil, nil, nil), s
+	return NewRouter(s, dir, testJWTSecret, likeSvc, nil, nil, nil, nil), s
 }
 
 func do(t *testing.T, r *gin.Engine, method, path string, body interface{}, userID int64) *httptest.ResponseRecorder {

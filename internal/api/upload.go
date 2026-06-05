@@ -80,6 +80,10 @@ func (h *Handler) Upload(c *gin.Context) {
 	if h.fanoutPub != nil {
 		h.fanoutPub.PublishFanout(uid, v.ID, v.CreatedAt)
 	}
+	// 投递转码任务（ffmpeg 可用时）
+	if h.transcodePub != nil {
+		h.transcodePub.PublishTranscode(v.ID, uid, dstPath, header.Filename)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
 		"video_id":  v.ID,

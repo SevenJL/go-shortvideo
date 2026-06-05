@@ -43,21 +43,28 @@ type FanoutPublisher interface {
 	PublishFanout(authorID, videoID, tsMilli int64)
 }
 
-// Handler 持有处理请求所需的依赖。
-type Handler struct {
-	store     *store.Store
-	uploadDir string
-	jwtSecret string
-	likeSvc   LikeService
-	feedSvc   *feed.Service
-	recSvc    *rec.Recommender
-	fanoutPub FanoutPublisher
+// TranscodePublisher 上传视频时投递转码任务。
+type TranscodePublisher interface {
+	PublishTranscode(videoID, authorID int64, sourcePath, filename string)
 }
 
-func NewHandler(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher) *Handler {
+// Handler 持有处理请求所需的依赖。
+type Handler struct {
+	store       *store.Store
+	uploadDir   string
+	jwtSecret   string
+	likeSvc     LikeService
+	feedSvc     *feed.Service
+	recSvc      *rec.Recommender
+	fanoutPub   FanoutPublisher
+	transcodePub TranscodePublisher
+}
+
+func NewHandler(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher, transcodePub TranscodePublisher) *Handler {
 	return &Handler{
 		store: s, uploadDir: uploadDir, jwtSecret: jwtSecret,
-		likeSvc: likeSvc, feedSvc: feedSvc, recSvc: recSvc, fanoutPub: fanoutPub,
+		likeSvc: likeSvc, feedSvc: feedSvc, recSvc: recSvc,
+		fanoutPub: fanoutPub, transcodePub: transcodePub,
 	}
 }
 
