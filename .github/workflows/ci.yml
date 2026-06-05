@@ -1,0 +1,202 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore: ['docs/**', '*.md', 'web/**']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['docs/**', '*.md', 'web/**']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+
+jobs:
+  # ============================================
+  # 1. Lint
+  # ============================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}' }
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m --out-format=colored-line-number
+
+  # ============================================
+  # 2. Test (matrix: ubuntu + macos)
+  # ============================================
+  test:
+    name: Test (${{ matrix.os }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_DATABASE: shortvideo
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}' }
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Unit tests
+        run: go test ./... -count=1 -timeout=2m -coverprofile=coverage.out
+
+      - name: Race detector
+        run: go test -race ./internal/... -count=1 -timeout=5m
+
+      - name: Coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.out
+
+  # ============================================
+  # 3. Build (cross-platform)
+  # ============================================
+  build:
+    name: Build
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}' }
+
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+        run: |
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -o bin/server-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/server-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  # ============================================
+  # 4. Security scan
+  # ============================================
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}' }
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: gosec
+        uses: securego/gosec@master
+        with: { args: '-no-fail -fmt sarif -out results.sarif ./...' }
+        continue-on-error: true
+
+      - uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: results.sarif }
+        continue-on-error: true
+
+  # ============================================
+  # 5. Integration test (Redis + MySQL)
+  # ============================================
+  integration:
+    name: Integration Test
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_DATABASE: shortvideo
+        ports: ['3306:3306']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}' }
+
+      - name: Start server (full stack)
+        run: |
+          go build -o bin/server ./cmd/server
+          ./bin/server -config config.yaml &
+          sleep 3
+          curl -sf http://localhost:8080/healthz
+
+      - name: E2E smoke test
+        run: |
+          # Register + Login
+          TOKEN=$(curl -s -X POST http://localhost:8080/api/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"alice","password":"password123"}' | \
+            python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["token"])')
+
+          # Like
+          curl -sf -X POST http://localhost:8080/api/videos/1/like \
+            -H "Authorization: Bearer $TOKEN"
+
+          # Feed
+          curl -sf "http://localhost:8080/api/feed?limit=5" \
+            -H "Authorization: Bearer $TOKEN"
+
+          # Rec
+          curl -sf "http://localhost:8080/api/rec" \
+            -H "Authorization: Bearer $TOKEN"
+
+          # Video list
+          curl -sf "http://localhost:8080/api/videos?limit=10"
+
+          # Metrics
+          curl -sf http://localhost:8080/metrics | grep http_requests_total
+
+          echo "E2E smoke test: PASSED"

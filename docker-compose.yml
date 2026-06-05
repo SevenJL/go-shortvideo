@@ -1,0 +1,101 @@
+# ============================================
+# ShortVideo — 完整开发/生产环境
+# ============================================
+# 启动: docker compose up -d
+# 停止: docker compose down
+# 日志: docker compose logs -f server
+# ============================================
+
+services:
+  # ---- 短视频主服务 ----
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shortvideo-server
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_ADDR=:8080
+      - SERVER_MODE=release
+      - JWT_SECRET=${JWT_SECRET:-prod-change-me}
+      - REDIS_ADDR=redis:6379
+      - MYSQL_DSN=root:${MYSQL_ROOT_PASSWORD:-testpass}@tcp(mysql:3306)/shortvideo?parseTime=true
+    volumes:
+      - ./data/uploads:/app/data/uploads
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - shortvideo
+
+  # ---- Redis ----
+  redis:
+    image: redis:7-alpine
+    container_name: shortvideo-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - shortvideo
+
+  # ---- MySQL ----
+  mysql:
+    image: mysql:8
+    container_name: shortvideo-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-testpass}
+      MYSQL_DATABASE: shortvideo
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - shortvideo
+
+  # ---- 转码 Worker (可选, 需 ffmpeg) ----
+  transcode:
+    build:
+      context: .
+      dockerfile: Dockerfile.transcode
+    container_name: shortvideo-transcode
+    environment:
+      - REDIS_ADDR=redis:6379
+      - OSS_ENDPOINT=${OSS_ENDPOINT:-}
+      - OSS_KEY=${OSS_KEY:-}
+      - OSS_SECRET=${OSS_SECRET:-}
+      - OSS_BUCKET=${OSS_BUCKET:-shortvideo}
+    volumes:
+      - ./data/uploads:/app/data/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - shortvideo
+    profiles: [full]  # 仅 docker compose --profile full 时启动
+
+volumes:
+  redis-data:
+  mysql-data:
+
+networks:
+  shortvideo:
+    driver: bridge

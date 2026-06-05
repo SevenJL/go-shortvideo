@@ -1,0 +1,12 @@
+.git
+.gitignore
+.claude
+docs
+*.md
+data/uploads/*
+!data/uploads/.gitkeep
+bin
+tmp
+*.log
+.env
+.env.local

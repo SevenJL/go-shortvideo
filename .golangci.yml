@@ -1,0 +1,45 @@
+run:
+  timeout: 5m
+  tests: true
+  go: '1.25'
+
+linters:
+  enable:
+    - errcheck      # 检查未处理的错误
+    - gosimple      # 简化代码建议
+    - govet         # Go 官方 vet
+    - ineffassign   # 无效赋值
+    - staticcheck   # 静态分析
+    - unused        # 未使用代码
+    - gofmt         # 格式检查
+    - goimports     # import 排序
+    - misspell      # 拼写检查
+    - unconvert     # 不必要类型转换
+    - prealloc      # 预分配 slice
+    - bodyclose     # HTTP body 关闭
+    - nilerr        # nil error 返回
+    - gocritic      # 代码评审
+  disable:
+    - exhaustruct   # 不需要全字段初始化
+
+linters-settings:
+  errcheck:
+    check-blank: true
+    exclude-functions:
+      - (net/http.ResponseWriter).Write
+      - encoding/json.Marshal
+  gofmt:
+    simplify: true
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters: [errcheck, bodyclose, gocritic]
+    - path: cmd/
+      linters: [prealloc]
+  max-issues-per-linter: 0
+  max-same-issues: 0
