@@ -30,6 +30,7 @@ import (
 	"shortvideo/pkg/mysqlx"
 	"shortvideo/pkg/ratelimit"
 	"shortvideo/pkg/redisx"
+	"shortvideo/pkg/security"
 )
 
 func main() {
@@ -208,8 +209,25 @@ func main() {
 		for range t.C { pathLimiter.Cleanup() }
 	}()
 
+	// ---- 安全中间件 ----
+	corsCfg := security.DefaultCORS()
+	if cfg.Server.Mode == "debug" || cfg.Server.Mode == "test" {
+		corsCfg = security.PermissiveCORS()
+	}
+	loginProtection := security.NewLoginProtection(10, 5*time.Minute, 15*time.Minute)
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for range t.C { loginProtection.Cleanup() }
+	}()
+
 	// ---- Gin 路由 ----
 	r := api.NewRouter(s, cfg.Storage.UploadDir, cfg.JWT.Secret, likeSvc, feedSvc, recSvc, fanoutPub, transcodePub)
+	// 中间件链: CORS → SecurityHeaders → MaxBody → LoginProtect → Metrics → RateLimit
+	r.Use(security.CORSMiddleware(corsCfg))
+	r.Use(security.SecureHeaders())
+	r.Use(security.MaxBodySize(500 << 20)) // 500MB
+	r.Use(loginProtection.GinMiddleware())
 	r.Use(metrics.GinMiddleware())
 	r.Use(pathLimiter.GinMiddleware(ratelimit.KeyFromUserID))
 	r.GET("/metrics", func(c *gin.Context) { metrics.Handler().ServeHTTP(c.Writer, c.Request) })

@@ -58,6 +58,15 @@ rate_limit:
   user:     { qps: 20,  burst: 50 }   # /api/users/*
   fallback: { qps: 500, burst: 1000 } # 其他
 
+# ---- 安全配置 ----
+security:
+  cors_allowed_origins: []    # CORS 白名单, 如 ["https://app.example.com"]; 空=禁止跨域
+  permissive_cors: false      # 开发模式允许所有来源
+  login_max_failures: 10      # 登录最大失败次数
+  login_fail_window: 5m       # 失败计数窗口
+  login_block_time: 15m       # 超阈值封禁时间
+  max_body_size: 500           # 最大请求体(MB)
+
 # ---- 阿里云 OSS (留空则使用本地存储) ----
 oss:
   endpoint: ""              # oss-cn-hangzhou.aliyuncs.com
