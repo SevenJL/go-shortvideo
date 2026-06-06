@@ -43,7 +43,7 @@ func (h *Handler) Login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "用户名或密码错误"})
 		return
 	}
-	token, err := auth.NewJWT(h.jwtSecret).GenerateToken(u.ID)
+	token, err := auth.NewJWTWithOptions(h.jwtSecret, h.jwtTTL, h.allowXUserID).GenerateToken(u.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "令牌生成失败"})
 		return

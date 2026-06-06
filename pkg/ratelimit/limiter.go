@@ -2,11 +2,15 @@
 package ratelimit
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 )
 
@@ -64,6 +68,12 @@ func (l *Limiter) Cleanup() {
 type PathLimiter struct {
 	limiters map[string]*Limiter
 	fallback *Limiter
+}
+
+// GinLimiter is the common middleware surface for local and distributed
+// limiters.
+type GinLimiter interface {
+	GinMiddleware(keyFn func(*gin.Context) string) gin.HandlerFunc
 }
 
 func NewPathLimiter(rules map[string][2]int, fallback *Limiter) *PathLimiter {
@@ -138,6 +148,78 @@ func (pl *PathLimiter) GinMiddleware(keyFn func(*gin.Context) string) gin.Handle
 	}
 }
 
+// RedisPathLimiter implements a distributed fixed-window limiter. It is used
+// for multi-pod production deployments where process-local token buckets do
+// not provide a global cap.
+type RedisPathLimiter struct {
+	rdb      redis.UniversalClient
+	rules    map[string][2]int
+	fallback [2]int
+	window   time.Duration
+	prefix   string
+}
+
+func NewRedisPathLimiter(rdb redis.UniversalClient, rules map[string][2]int, fallback [2]int) *RedisPathLimiter {
+	return &RedisPathLimiter{
+		rdb:      rdb,
+		rules:    rules,
+		fallback: fallback,
+		window:   time.Second,
+		prefix:   "ratelimit:",
+	}
+}
+
+func (pl *RedisPathLimiter) Allow(ctx context.Context, path, key string) bool {
+	route, cfg := pl.ruleFor(path)
+	limit := cfg[0] + cfg[1]
+	if limit <= 0 {
+		return false
+	}
+	now := time.Now().Unix()
+	redisKey := pl.prefix + route + ":" + key + ":" + formatInt(now)
+	n, err := pl.rdb.Incr(ctx, redisKey).Result()
+	if err != nil {
+		// Degrade open on transient Redis issues; /readyz will expose the
+		// dependency failure so traffic can be drained by orchestration.
+		return true
+	}
+	if n == 1 {
+		_ = pl.rdb.Expire(ctx, redisKey, pl.window+time.Second).Err()
+	}
+	return n <= int64(limit)
+}
+
+func (pl *RedisPathLimiter) GinMiddleware(keyFn func(*gin.Context) string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		key := keyFn(c)
+		if key == "" {
+			c.Next()
+			return
+		}
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+		}
+		if !pl.Allow(c.Request.Context(), path, key) {
+			c.Header("Retry-After", "1")
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"code": 429, "msg": "请求过于频繁，请稍后再试",
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
+func (pl *RedisPathLimiter) ruleFor(path string) (string, [2]int) {
+	for prefix, cfg := range pl.rules {
+		if len(path) >= len(prefix) && path[:len(prefix)] == prefix {
+			return prefix, cfg
+		}
+	}
+	return "fallback", pl.fallback
+}
+
 func DefaultPathRules() map[string][2]int {
 	return map[string][2]int{
 		"/api/login":  {5, 10},
@@ -154,10 +236,52 @@ func KeyFromUserID(c *gin.Context) string {
 			return "uid:" + formatInt(id)
 		}
 	}
-	if raw := c.GetHeader("X-User-Id"); raw != "" {
-		return "uid:" + raw
+	if allow, ok := c.Get("allow_x_user_id"); !ok || allow == true {
+		if raw := c.GetHeader("X-User-Id"); raw != "" {
+			return "uid:" + raw
+		}
 	}
 	return KeyFromIPGin(c)
+}
+
+func KeyFromJWTOrUserID(secret string) func(*gin.Context) string {
+	return func(c *gin.Context) string {
+		if uid, ok := c.Get("user_id"); ok {
+			if id, ok := uid.(int64); ok && id > 0 {
+				return "uid:" + formatInt(id)
+			}
+		}
+		authHeader := c.GetHeader("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") && secret != "" {
+			if uid, ok := parseJWTUserID(strings.TrimPrefix(authHeader, "Bearer "), []byte(secret)); ok {
+				return "uid:" + formatInt(uid)
+			}
+		}
+		if allow, ok := c.Get("allow_x_user_id"); !ok || allow == true {
+			if raw := c.GetHeader("X-User-Id"); raw != "" {
+				return "uid:" + raw
+			}
+		}
+		return KeyFromIPGin(c)
+	}
+}
+
+func parseJWTUserID(tokenStr string, secret []byte) (int64, bool) {
+	type claims struct {
+		jwt.RegisteredClaims
+		UserID int64 `json:"uid"`
+	}
+	token, err := jwt.ParseWithClaims(tokenStr, &claims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrTokenSignatureInvalid
+		}
+		return secret, nil
+	})
+	if err != nil || !token.Valid {
+		return 0, false
+	}
+	c, ok := token.Claims.(*claims)
+	return c.UserID, ok && c.UserID > 0
 }
 
 func KeyFromIPGin(c *gin.Context) string {

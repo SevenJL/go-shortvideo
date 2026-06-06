@@ -9,7 +9,7 @@
 # ---- 服务配置 ----
 server:
   addr: ":8080"             # 监听地址
-  mode: "release"           # debug | release | test
+  mode: "debug"             # debug | release | test
   read_timeout: 15s
   write_timeout: 30s
 
@@ -38,11 +38,15 @@ mysql:
 
 # ---- 功能开关 ----
 features:
-  seed: true                # 启动时注入演示数据
+  seed: true                # 启动时注入演示数据；release 模式必须为 false
   mq_enabled: true          # 启用进程内消息队列(fanout/transcode/like-worker)
   transcode_enabled: true   # 启用 ffmpeg 转码(需安装 ffmpeg)
   reconcile_enabled: true   # 启用 Redis↔MySQL 对账
   recommend_enabled: true   # 启用推荐流
+
+# ---- MQ ----
+mq:
+  type: "chan"              # chan=本地开发; redis_stream=生产过渡持久化队列
 
 # ---- 对账配置 ----
 reconcile:
@@ -73,3 +77,4 @@ oss:
   access_key: ""
   secret_key: ""
   bucket: "shortvideo"
+  cdn_domain: ""            # 如 https://cdn.example.com，留空则使用 OSS 源站 URL

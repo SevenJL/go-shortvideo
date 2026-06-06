@@ -6,6 +6,15 @@ import "database/sql"
 // 生产环境建议用 golang-migrate 等专业工具管理 schema 版本。
 func RunMigrations(db *sql.DB) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS user_account (
+			user_id       BIGINT NOT NULL AUTO_INCREMENT,
+			username      VARCHAR(64) NOT NULL,
+			password_hash VARCHAR(128) NOT NULL,
+			created_at    BIGINT NOT NULL COMMENT '毫秒时间戳',
+			PRIMARY KEY (user_id),
+			UNIQUE KEY uk_username (username)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
 		`CREATE TABLE IF NOT EXISTS like_record (
 			user_id    BIGINT NOT NULL,
 			video_id   BIGINT NOT NULL,
@@ -40,10 +49,11 @@ func RunMigrations(db *sql.DB) error {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
 		`CREATE TABLE IF NOT EXISTS video (
-			video_id    BIGINT PRIMARY KEY,
+			video_id    BIGINT NOT NULL AUTO_INCREMENT,
 			author_id   BIGINT NOT NULL,
 			title       VARCHAR(255) NOT NULL DEFAULT '',
 			play_url    VARCHAR(512) NOT NULL DEFAULT '' COMMENT '原始/默认播放地址',
+			play_urls   TEXT NULL COMMENT 'JSON: 多清晰度播放地址',
 			cover_url   VARCHAR(512) NOT NULL DEFAULT '',
 			duration    INT NOT NULL DEFAULT 0 COMMENT '视频时长(秒)',
 			width       INT NOT NULL DEFAULT 0,
@@ -52,8 +62,20 @@ func RunMigrations(db *sql.DB) error {
 			status      TINYINT NOT NULL DEFAULT 1 COMMENT '0=上传中 1=转码中 2=已完成 3=失败',
 			created_at  BIGINT NOT NULL COMMENT '毫秒时间戳',
 			updated_at  BIGINT NOT NULL DEFAULT 0 COMMENT '毫秒时间戳',
+			PRIMARY KEY (video_id),
 			INDEX idx_author (author_id, created_at),
 			INDEX idx_status (status, created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+		`CREATE TABLE IF NOT EXISTS comment (
+			comment_id BIGINT NOT NULL AUTO_INCREMENT,
+			video_id   BIGINT NOT NULL,
+			user_id    BIGINT NOT NULL,
+			content    TEXT NOT NULL,
+			created_at BIGINT NOT NULL COMMENT '毫秒时间戳',
+			PRIMARY KEY (comment_id),
+			INDEX idx_video (video_id, comment_id),
+			INDEX idx_user (user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 
@@ -62,5 +84,6 @@ func RunMigrations(db *sql.DB) error {
 			return err
 		}
 	}
+	_, _ = db.Exec(`ALTER TABLE video ADD COLUMN play_urls TEXT NULL COMMENT 'JSON: 多清晰度播放地址' AFTER play_url`)
 	return nil
 }

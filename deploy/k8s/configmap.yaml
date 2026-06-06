@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shortvideo-config
+data:
+  SERVER_ADDR: ":8080"
+  SERVER_MODE: "release"
+  FEATURES_SEED: "false"
+  MQ_TYPE: "redis_stream"
+  FEATURES_MQ_ENABLED: "true"
+  FEATURES_RECONCILE_ENABLED: "true"
+  FEATURES_RECOMMEND_ENABLED: "true"
+  STORAGE_UPLOAD_DIR: "/app/data/uploads"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OSS_CDN_DOMAIN: ""

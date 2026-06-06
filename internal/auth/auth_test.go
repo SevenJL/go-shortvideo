@@ -122,6 +122,32 @@ func TestGinMiddleware_FallbackXUserId(t *testing.T) {
 	}
 }
 
+func TestGinMiddleware_XUserIdDisabled(t *testing.T) {
+	j := NewJWTWithOptions(testSecret, time.Hour, false)
+	c, w := ginTestCtx(t, "", "99")
+
+	j.GinMiddleware()(c)
+	if !c.IsAborted() {
+		t.Fatal("should abort when X-User-Id fallback is disabled")
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", w.Code)
+	}
+}
+
+func TestGenerateToken_ConfigurableTTL(t *testing.T) {
+	j := NewJWTWithOptions(testSecret, time.Nanosecond, false)
+	tok, err := j.GenerateToken(1)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	_, err = j.ValidateToken(tok)
+	if err != ErrInvalidToken {
+		t.Fatalf("expected expired token, got %v", err)
+	}
+}
+
 func TestGinMiddleware_NoAuth(t *testing.T) {
 	j := NewJWT(testSecret)
 	c, w := ginTestCtx(t, "", "")

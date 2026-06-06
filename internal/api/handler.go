@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -31,9 +32,15 @@ func NewRedisLikeService(svc *like.Service) *RedisLikeService {
 	return &RedisLikeService{svc: svc}
 }
 
-func (r *RedisLikeService) Like(uid, vid int64) (bool, error)  { return r.svc.Like(context.Background(), uid, vid) }
-func (r *RedisLikeService) Unlike(uid, vid int64) (bool, error) { return r.svc.Unlike(context.Background(), uid, vid) }
-func (r *RedisLikeService) Count(vid int64) (int64, error)       { return r.svc.Count(context.Background(), vid) }
+func (r *RedisLikeService) Like(uid, vid int64) (bool, error) {
+	return r.svc.Like(context.Background(), uid, vid)
+}
+func (r *RedisLikeService) Unlike(uid, vid int64) (bool, error) {
+	return r.svc.Unlike(context.Background(), uid, vid)
+}
+func (r *RedisLikeService) Count(vid int64) (int64, error) {
+	return r.svc.Count(context.Background(), vid)
+}
 func (r *RedisLikeService) BatchIsLiked(ctx context.Context, uid int64, vids []int64) (map[int64]bool, error) {
 	return r.svc.BatchIsLiked(ctx, uid, vids)
 }
@@ -50,20 +57,26 @@ type TranscodePublisher interface {
 
 // Handler 持有处理请求所需的依赖。
 type Handler struct {
-	store       *store.Store
-	uploadDir   string
-	jwtSecret   string
-	likeSvc     LikeService
-	feedSvc     *feed.Service
-	recSvc      *rec.Recommender
-	fanoutPub   FanoutPublisher
+	store        *store.Store
+	uploadDir    string
+	jwtSecret    string
+	jwtTTL       time.Duration
+	likeSvc      LikeService
+	feedSvc      *feed.Service
+	recSvc       *rec.Recommender
+	fanoutPub    FanoutPublisher
 	transcodePub TranscodePublisher
+	allowXUserID bool
 }
 
 func NewHandler(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher, transcodePub TranscodePublisher) *Handler {
+	return NewHandlerWithOptions(s, uploadDir, jwtSecret, 24*time.Hour, true, likeSvc, feedSvc, recSvc, fanoutPub, transcodePub)
+}
+
+func NewHandlerWithOptions(s *store.Store, uploadDir, jwtSecret string, jwtTTL time.Duration, allowXUserID bool, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher, transcodePub TranscodePublisher) *Handler {
 	return &Handler{
-		store: s, uploadDir: uploadDir, jwtSecret: jwtSecret,
-		likeSvc: likeSvc, feedSvc: feedSvc, recSvc: recSvc,
+		store: s, uploadDir: uploadDir, jwtSecret: jwtSecret, jwtTTL: jwtTTL,
+		allowXUserID: allowXUserID, likeSvc: likeSvc, feedSvc: feedSvc, recSvc: recSvc,
 		fanoutPub: fanoutPub, transcodePub: transcodePub,
 	}
 }
@@ -84,6 +97,11 @@ func requireUser(c *gin.Context) (int64, bool) {
 func currentUserID(c *gin.Context) (int64, bool) {
 	if uid, ok := auth.UserIDFromContext(c); ok {
 		return uid, true
+	}
+	if h, ok := c.Get("allow_x_user_id"); ok {
+		if allow, ok := h.(bool); ok && !allow {
+			return 0, false
+		}
 	}
 	raw := c.GetHeader("X-User-Id")
 	if raw == "" {

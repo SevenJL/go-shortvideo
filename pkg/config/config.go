@@ -16,6 +16,7 @@ type Config struct {
 	Storage   StorageConfig   `mapstructure:"storage"`
 	Redis     RedisConfig     `mapstructure:"redis"`
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
+	MQ        MQConfig        `mapstructure:"mq"`
 	Features  FeaturesConfig  `mapstructure:"features"`
 	Reconcile ReconcileConfig `mapstructure:"reconcile"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
@@ -49,12 +50,16 @@ type MySQLConfig struct {
 	MaxIdleConns int    `mapstructure:"max_idle_conns"`
 }
 
+type MQConfig struct {
+	Type string `mapstructure:"type"`
+}
+
 type FeaturesConfig struct {
-	Seed              bool `mapstructure:"seed"`
-	MQEnabled         bool `mapstructure:"mq_enabled"`
-	TranscodeEnabled  bool `mapstructure:"transcode_enabled"`
-	ReconcileEnabled  bool `mapstructure:"reconcile_enabled"`
-	RecommendEnabled  bool `mapstructure:"recommend_enabled"`
+	Seed             bool `mapstructure:"seed"`
+	MQEnabled        bool `mapstructure:"mq_enabled"`
+	TranscodeEnabled bool `mapstructure:"transcode_enabled"`
+	ReconcileEnabled bool `mapstructure:"reconcile_enabled"`
+	RecommendEnabled bool `mapstructure:"recommend_enabled"`
 }
 
 type ReconcileConfig struct {
@@ -82,6 +87,7 @@ type OSSConfig struct {
 	AccessKey string `mapstructure:"access_key"`
 	SecretKey string `mapstructure:"secret_key"`
 	Bucket    string `mapstructure:"bucket"`
+	CDNDomain string `mapstructure:"cdn_domain"`
 }
 
 // Load 加载配置文件，环境变量自动覆盖。
@@ -103,6 +109,7 @@ func Load(configFile string) (*Config, error) {
 	// 环境变量映射: server.addr → SERVER_ADDR
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+	bindEnvs(v)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -131,6 +138,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("mysql.dsn", "")
 	v.SetDefault("mysql.max_open_conns", 25)
 	v.SetDefault("mysql.max_idle_conns", 5)
+	v.SetDefault("mq.type", "chan")
 	v.SetDefault("features.seed", true)
 	v.SetDefault("features.mq_enabled", true)
 	v.SetDefault("features.transcode_enabled", true)
@@ -150,6 +158,24 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rate_limit.user.burst", 50)
 	v.SetDefault("rate_limit.fallback.qps", 500)
 	v.SetDefault("rate_limit.fallback.burst", 1000)
+}
+
+func bindEnvs(v *viper.Viper) {
+	keys := []string{
+		"server.addr", "server.mode", "server.read_timeout", "server.write_timeout",
+		"jwt.secret", "jwt.ttl",
+		"storage.upload_dir", "storage.max_upload_size",
+		"redis.addr",
+		"mysql.dsn", "mysql.max_open_conns", "mysql.max_idle_conns",
+		"mq.type",
+		"features.seed", "features.mq_enabled", "features.transcode_enabled",
+		"features.reconcile_enabled", "features.recommend_enabled",
+		"reconcile.threshold", "reconcile.interval",
+		"oss.endpoint", "oss.access_key", "oss.secret_key", "oss.bucket", "oss.cdn_domain",
+	}
+	for _, key := range keys {
+		_ = v.BindEnv(key)
+	}
 }
 
 // RedisEnabled 判断是否启用 Redis。

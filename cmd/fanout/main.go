@@ -15,23 +15,48 @@ import (
 	"shortvideo/internal/relation"
 	"shortvideo/internal/store"
 	"shortvideo/pkg/mq"
+	"shortvideo/pkg/mysqlx"
 	"shortvideo/pkg/redisx"
 )
 
 func main() {
 	redisAddr := flag.String("redis", envOrDefault("REDIS_ADDR", "localhost:6379"), "Redis 地址")
+	mysqlDSN := flag.String("mysql-dsn", envOrDefault("MYSQL_DSN", ""), "MySQL DSN")
+	mqType := flag.String("mq-type", envOrDefault("MQ_TYPE", "chan"), "MQ 类型: chan|redis_stream")
 	flag.Parse()
 
 	rdb := redisx.NewClient(*redisAddr)
-	memStore := store.New()
-	memStore.Seed()
 
-	relRepo := relation.NewMemRepo(memStore)
+	var relRepo relation.Repo
+	if *mysqlDSN != "" {
+		db, err := mysqlx.NewDB(mysqlx.Config{DSN: *mysqlDSN, MaxOpenConns: 10, MaxIdleConns: 2})
+		if err != nil {
+			log.Fatalf("MySQL 连接失败: %v", err)
+		}
+		defer db.Close()
+		if err := mysqlx.RunMigrations(db); err != nil {
+			log.Fatalf("MySQL 建表失败: %v", err)
+		}
+		relRepo = relation.NewMysqlRepo(db)
+		log.Println("MySQL 关系仓储已启用")
+	} else {
+		memStore := store.New()
+		memStore.Seed()
+		relRepo = relation.NewMemRepo(memStore)
+		log.Println("使用内存关系仓储（仅开发/测试）")
+	}
 	relSvc := relation.NewService(rdb, relRepo)
 	feedStore := feed.NewStore(rdb)
 	worker := feed.NewFanoutWorker(feedStore, relSvc)
 
-	bus := mq.NewChanBus(2048)
+	var bus mq.Consumer
+	if *mqType == "redis_stream" {
+		bus = mq.NewRedisStreamBus(rdb, "shortvideo", 3)
+		log.Printf("使用 Redis Stream 消费 fanout: %s", *redisAddr)
+	} else {
+		bus = mq.NewChanBus(2048)
+		log.Println("使用本地 ChanBus（仅开发/测试）")
+	}
 	bus.Subscribe("fanout", func(ctx context.Context, payload []byte) error {
 		var task feed.FanoutTask
 		if err := json.Unmarshal(payload, &task); err != nil {

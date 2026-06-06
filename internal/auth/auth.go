@@ -23,11 +23,20 @@ var (
 )
 
 type JWT struct {
-	secret []byte
+	secret       []byte
+	ttl          time.Duration
+	allowXUserID bool
 }
 
 func NewJWT(secret string) *JWT {
-	return &JWT{secret: []byte(secret)}
+	return NewJWTWithOptions(secret, 24*time.Hour, true)
+}
+
+func NewJWTWithOptions(secret string, ttl time.Duration, allowXUserID bool) *JWT {
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	return &JWT{secret: []byte(secret), ttl: ttl, allowXUserID: allowXUserID}
 }
 
 type claims struct {
@@ -40,7 +49,7 @@ func (j *JWT) GenerateToken(userID int64) (string, error) {
 	c := claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(j.ttl)),
 		},
 		UserID: userID,
 	}
@@ -68,7 +77,7 @@ func (j *JWT) ValidateToken(tokenStr string) (int64, error) {
 }
 
 // GinMiddleware 返回 Gin 鉴权中间件。
-// 优先 Authorization: Bearer <token>，fallback X-User-Id 头。
+// 优先 Authorization: Bearer <token>；只有显式允许时才接受 X-User-Id 开发 fallback。
 func (j *JWT) GinMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 1. JWT Bearer
@@ -87,8 +96,15 @@ func (j *JWT) GinMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// 2. X-User-Id fallback
-		if raw := c.GetHeader("X-User-Id"); raw != "" {
+		// 2. X-User-Id fallback（仅开发/测试模式允许）
+		if j.allowXUserID {
+			raw := c.GetHeader("X-User-Id")
+			if raw == "" {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"code": 401, "msg": "缺少认证信息",
+				})
+				return
+			}
 			id, err := strconv.ParseInt(raw, 10, 64)
 			if err == nil && id > 0 {
 				c.Set("user_id", id)

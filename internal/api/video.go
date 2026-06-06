@@ -68,6 +68,7 @@ func (h *Handler) VideoStatus(c *gin.Context) {
 		"status":      v.Status,
 		"status_text": statusText,
 		"play_url":    v.PlayURL,
+		"play_urls":   v.PlayURLs,
 		"cover_url":   v.CoverURL,
 		"duration":    v.Duration,
 		"width":       v.Width,
@@ -94,6 +95,9 @@ func (h *Handler) GetVideo(c *gin.Context) {
 		return
 	}
 	item := videoItem{Video: v}
+	if cnt, err := h.likeSvc.Count(v.ID); err == nil {
+		item.LikeCount = cnt
+	}
 	if uid, ok := currentUserID(c); ok {
 		m, _ := h.likeSvc.BatchIsLiked(c.Request.Context(), uid, []int64{v.ID})
 		item.Liked = m[v.ID]
@@ -128,6 +132,9 @@ func (h *Handler) writeFeed(c *gin.Context, videos []model.Video) {
 		likedMap, _ = h.likeSvc.BatchIsLiked(c.Request.Context(), uid, ids)
 	}
 	for _, v := range videos {
+		if cnt, err := h.likeSvc.Count(v.ID); err == nil {
+			v.LikeCount = cnt
+		}
 		item := videoItem{Video: v}
 		if likedMap != nil {
 			item.Liked = likedMap[v.ID]

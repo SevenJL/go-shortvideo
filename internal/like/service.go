@@ -4,7 +4,6 @@ package like
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"time"
 
@@ -12,16 +11,16 @@ import (
 )
 
 const (
-	userLikeKeyPrefix  = "userlike:"  // SET：用户点赞过的视频（去重门）
-	likeCountKeyPrefix = "likecnt:"   // STRING：分片计数器
-	CounterShards      = 16           // 计数分片数，越多写热点越分散
+	userLikeKeyPrefix  = "userlike:" // SET：用户点赞过的视频（去重门）
+	likeCountKeyPrefix = "likecnt:"  // STRING：分片计数器
+	CounterShards      = 16          // 计数分片数，越多写热点越分散
 )
 
 // LikeEvent 是点赞/取消点赞事件，通过 MQ 异步落库。
 type LikeEvent struct {
 	UserID  int64  `json:"user_id"`
 	VideoID int64  `json:"video_id"`
-	Action  string `json:"action"`  // "like" | "unlike"
+	Action  string `json:"action"` // "like" | "unlike"
 	TsMilli int64  `json:"ts_milli"`
 }
 
@@ -30,14 +29,23 @@ type EventProducer interface {
 	Publish(ctx context.Context, e LikeEvent) error
 }
 
+type CounterWriter interface {
+	Add(videoID, delta int64)
+}
+
 // Service 处理点赞/取消点赞的核心链路。
 type Service struct {
 	rdb      redis.UniversalClient
+	counter  CounterWriter
 	producer EventProducer
 }
 
 func NewService(rdb redis.UniversalClient, p EventProducer) *Service {
 	return &Service{rdb: rdb, producer: p}
+}
+
+func (s *Service) SetCounterWriter(counter CounterWriter) {
+	s.counter = counter
 }
 
 func userLikeKey(uid int64) string {
@@ -62,12 +70,14 @@ func (s *Service) Like(ctx context.Context, uid, vid int64) (changed bool, err e
 		return false, nil
 	}
 
-	// ② 计数：随机落一个分片，分散写热点
-	shard := rand.Intn(CounterShards)
-	if err := s.rdb.IncrBy(ctx, CountShardKey(vid, shard), 1).Err(); err != nil {
-		// 计数失败：回滚去重门，避免「已记录但未计数」的状态偏差
-		_ = s.rdb.SRem(ctx, userLikeKey(uid), vid).Err()
-		return false, err
+	// ② 计数：生产链路用本地聚合器批量刷 Redis；未注入时保持同步写入。
+	if s.counter != nil {
+		s.counter.Add(vid, 1)
+	} else {
+		if err := s.rdb.IncrBy(ctx, CountShardKey(vid, int(vid%CounterShards)), 1).Err(); err != nil {
+			_ = s.rdb.SRem(ctx, userLikeKey(uid), vid).Err()
+			return false, err
+		}
 	}
 
 	// ③ 异步持久化（尽力而为，失败不阻塞主链路）
@@ -88,10 +98,13 @@ func (s *Service) Unlike(ctx context.Context, uid, vid int64) (changed bool, err
 		return false, nil
 	}
 
-	shard := rand.Intn(CounterShards)
-	if err := s.rdb.DecrBy(ctx, CountShardKey(vid, shard), 1).Err(); err != nil {
-		_ = s.rdb.SAdd(ctx, userLikeKey(uid), vid).Err() // 回滚
-		return false, err
+	if s.counter != nil {
+		s.counter.Add(vid, -1)
+	} else {
+		if err := s.rdb.DecrBy(ctx, CountShardKey(vid, int(vid%CounterShards)), 1).Err(); err != nil {
+			_ = s.rdb.SAdd(ctx, userLikeKey(uid), vid).Err()
+			return false, err
+		}
 	}
 
 	_ = s.producer.Publish(ctx, LikeEvent{

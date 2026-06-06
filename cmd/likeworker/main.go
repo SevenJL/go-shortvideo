@@ -14,16 +14,43 @@ import (
 
 	"shortvideo/internal/like"
 	"shortvideo/pkg/mq"
+	"shortvideo/pkg/mysqlx"
+	"shortvideo/pkg/redisx"
 )
 
 func main() {
+	redisAddr := flag.String("redis", envOrDefault("REDIS_ADDR", "localhost:6379"), "Redis 地址")
+	mysqlDSN := flag.String("mysql-dsn", envOrDefault("MYSQL_DSN", ""), "MySQL DSN")
+	mqType := flag.String("mq-type", envOrDefault("MQ_TYPE", "chan"), "MQ 类型: chan|redis_stream")
 	flag.Parse()
 
-	// MemLikeRepo：开发环境的内存实现，生产替换为 MySQL 分片实现。
-	repo := newMemLikeRepo()
+	var repo like.Repo
+	if *mysqlDSN != "" {
+		db, err := mysqlx.NewDB(mysqlx.Config{DSN: *mysqlDSN, MaxOpenConns: 10, MaxIdleConns: 2})
+		if err != nil {
+			log.Fatalf("MySQL 连接失败: %v", err)
+		}
+		defer db.Close()
+		if err := mysqlx.RunMigrations(db); err != nil {
+			log.Fatalf("MySQL 建表失败: %v", err)
+		}
+		repo = like.NewMysqlRepo(db)
+		log.Println("MySQL 点赞仓储已启用")
+	} else {
+		repo = newMemLikeRepo()
+		log.Println("使用内存点赞仓储（仅开发/测试）")
+	}
 	consumer := like.NewConsumer(repo)
 
-	bus := mq.NewChanBus(2048)
+	var bus mq.Consumer
+	if *mqType == "redis_stream" {
+		rdb := redisx.NewClient(*redisAddr)
+		bus = mq.NewRedisStreamBus(rdb, "shortvideo", 3)
+		log.Printf("使用 Redis Stream 消费 like-events: %s", *redisAddr)
+	} else {
+		bus = mq.NewChanBus(2048)
+		log.Println("使用本地 ChanBus（仅开发/测试）")
+	}
 	bus.Subscribe("like-events", func(ctx context.Context, payload []byte) error {
 		var e like.LikeEvent
 		if err := json.Unmarshal(payload, &e); err != nil {

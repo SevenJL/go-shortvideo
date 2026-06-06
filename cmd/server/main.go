@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +16,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"golang.org/x/time/rate"
 
 	"shortvideo/internal/api"
@@ -23,14 +28,17 @@ import (
 	"shortvideo/internal/relation"
 	"shortvideo/internal/store"
 	"shortvideo/internal/transcode"
+	"shortvideo/pkg/audit"
 	"shortvideo/pkg/config"
 	"shortvideo/pkg/media"
 	"shortvideo/pkg/metrics"
 	"shortvideo/pkg/mq"
 	"shortvideo/pkg/mysqlx"
+	"shortvideo/pkg/oss"
 	"shortvideo/pkg/ratelimit"
 	"shortvideo/pkg/redisx"
 	"shortvideo/pkg/security"
+	"shortvideo/pkg/tracing"
 )
 
 func main() {
@@ -42,27 +50,37 @@ func main() {
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
+	if err := validateProductionConfig(cfg); err != nil {
+		log.Fatalf("生产配置校验失败: %v", err)
+	}
 
 	gin.SetMode(cfg.Server.Mode)
+	audit.Configure("shortvideo")
 
 	// ---- 存储层 ----
 	s := store.New()
-	if cfg.Features.Seed {
-		s.Seed()
-		log.Println("已注入演示数据: alice(1)/bob(2)/carol(3); 密码均为 password123")
-	}
 	if err := os.MkdirAll(cfg.Storage.UploadDir, 0755); err != nil {
 		log.Fatalf("创建上传目录失败: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	shutdownTracing, err := tracing.Init(ctx, "shortvideo")
+	if err != nil {
+		log.Fatalf("OpenTelemetry 初始化失败: %v", err)
+	}
+	defer func() {
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutCancel()
+		_ = shutdownTracing(shutCtx)
+	}()
 
 	// ---- MySQL ----
+	var db *sql.DB
 	var likeRepo like.Repo
 	var relRepo relation.Repo
 	if cfg.MysqlEnabled() {
-		db, err := mysqlx.NewDB(mysqlx.Config{
+		db, err = mysqlx.NewDB(mysqlx.Config{
 			DSN: cfg.MySQL.DSN, MaxOpenConns: cfg.MySQL.MaxOpenConns,
 			MaxIdleConns: cfg.MySQL.MaxIdleConns,
 		})
@@ -74,10 +92,31 @@ func main() {
 		}
 		likeRepo = like.NewMysqlRepo(db)
 		relRepo = relation.NewMysqlRepo(db)
+		s = store.NewMySQL(db)
 		log.Println("MySQL 已连接")
 	} else {
 		likeRepo = newMemLikeRepo()
 		relRepo = relation.NewMemRepo(s)
+	}
+	if cfg.Features.Seed {
+		s.Seed()
+		log.Println("已注入演示数据: alice(1)/bob(2)/carol(3); 密码均为 password123")
+	}
+
+	var ossClient *oss.Client
+	if cfg.OSSEnabled() {
+		ossClient, err = oss.New(oss.Config{
+			Endpoint:        cfg.OSS.Endpoint,
+			AccessKeyID:     cfg.OSS.AccessKey,
+			AccessKeySecret: cfg.OSS.SecretKey,
+			BucketName:      cfg.OSS.Bucket,
+			CDNDomain:       cfg.OSS.CDNDomain,
+			LocalDir:        cfg.Storage.UploadDir,
+		})
+		if err != nil {
+			log.Fatalf("OSS 初始化失败: %v", err)
+		}
+		log.Println("OSS 客户端已初始化")
 	}
 
 	// ---- 中间件组件 ----
@@ -87,13 +126,22 @@ func main() {
 		recSvc       *rec.Recommender
 		fanoutPub    api.FanoutPublisher
 		transcodePub api.TranscodePublisher
+		rdb          redis.UniversalClient
 	)
 
 	if cfg.RedisEnabled() {
-		rdb := redisx.NewClient(cfg.Redis.Addr)
+		rdb = redisx.NewClient(cfg.Redis.Addr)
 		log.Printf("Redis 已连接: %s", cfg.Redis.Addr)
 
-		bus := mq.NewChanBus(2048)
+		var bus interface {
+			mq.Producer
+			mq.Consumer
+		}
+		if cfg.MQ.Type == "redis_stream" {
+			bus = mq.NewRedisStreamBus(rdb, "shortvideo", 3)
+		} else {
+			bus = mq.NewChanBus(2048)
+		}
 
 		// 点赞服务
 		likeProducer := &busProducer{bus: bus, topic: "like-events"}
@@ -101,6 +149,7 @@ func main() {
 		likeSvc = api.NewRedisLikeService(redisLikeSvc)
 
 		aggregator := like.NewCounterAggregator(rdb)
+		redisLikeSvc.SetCounterWriter(aggregator)
 		go aggregator.Run(ctx, 100*time.Millisecond)
 
 		// 点赞持久化 Worker
@@ -139,7 +188,7 @@ func main() {
 
 		// 转码 Worker
 		if cfg.Features.MQEnabled && cfg.Features.TranscodeEnabled && media.Available() {
-			tw := transcode.NewWorker(cfg.Storage.UploadDir, nil, &storeStatusUpdater{s: s})
+			tw := transcode.NewWorker(cfg.Storage.UploadDir, ossClient, &storeStatusUpdater{s: s})
 			bus.Subscribe("transcode", func(ctx context.Context, payload []byte) error {
 				var t transcode.Task
 				if err := json.Unmarshal(payload, &t); err != nil {
@@ -154,7 +203,7 @@ func main() {
 			go func() { _ = bus.Run(ctx) }()
 		}
 
-		fanoutPub = &fanoutPublisher{bus: bus, topic: "fanout"}
+		fanoutPub = &fanoutPublisher{bus: bus, topic: "fanout", feedStore: feedStore}
 		transcodePub = &transcodePublisherAdapter{bus: bus}
 
 		// 对账器
@@ -201,13 +250,26 @@ func main() {
 	}
 
 	// ---- 限流 ----
-	pathLimiter := ratelimit.NewPathLimiter(cfg.RateLimitRules(),
-		ratelimit.New(rate.Limit(cfg.RateLimit.Fallback.QPS), cfg.RateLimit.Fallback.Burst))
-	go func() {
-		t := time.NewTicker(1 * time.Minute)
-		defer t.Stop()
-		for range t.C { pathLimiter.Cleanup() }
-	}()
+	var pathLimiter ratelimit.GinLimiter
+	if rdb != nil {
+		pathLimiter = ratelimit.NewRedisPathLimiter(
+			rdb,
+			cfg.RateLimitRules(),
+			[2]int{cfg.RateLimit.Fallback.QPS, cfg.RateLimit.Fallback.Burst},
+		)
+		log.Println("已启用 Redis 分布式限流")
+	} else {
+		localLimiter := ratelimit.NewPathLimiter(cfg.RateLimitRules(),
+			ratelimit.New(rate.Limit(cfg.RateLimit.Fallback.QPS), cfg.RateLimit.Fallback.Burst))
+		pathLimiter = localLimiter
+		go func() {
+			t := time.NewTicker(1 * time.Minute)
+			defer t.Stop()
+			for range t.C {
+				localLimiter.Cleanup()
+			}
+		}()
+	}
 
 	// ---- 安全中间件 ----
 	corsCfg := security.DefaultCORS()
@@ -218,18 +280,32 @@ func main() {
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		defer t.Stop()
-		for range t.C { loginProtection.Cleanup() }
+		for range t.C {
+			loginProtection.Cleanup()
+		}
 	}()
 
 	// ---- Gin 路由 ----
-	r := api.NewRouter(s, cfg.Storage.UploadDir, cfg.JWT.Secret, likeSvc, feedSvc, recSvc, fanoutPub, transcodePub)
-	// 中间件链: CORS → SecurityHeaders → MaxBody → LoginProtect → Metrics → RateLimit
-	r.Use(security.CORSMiddleware(corsCfg))
-	r.Use(security.SecureHeaders())
-	r.Use(security.MaxBodySize(500 << 20)) // 500MB
-	r.Use(loginProtection.GinMiddleware())
-	r.Use(metrics.GinMiddleware())
-	r.Use(pathLimiter.GinMiddleware(ratelimit.KeyFromUserID))
+	readyCheck := newReadyChecker(db, rdb, cfg.Features.MQEnabled, cfg.MQ.Type, ossClient, cfg.Server.Mode == "release")
+	middlewares := []gin.HandlerFunc{
+		audit.RequestID(),
+		otelgin.Middleware("shortvideo"),
+		metrics.GinMiddleware(),
+		audit.GinMiddleware(),
+		security.CORSMiddleware(corsCfg),
+		security.SecureHeaders(),
+		security.MaxBodySize(500 << 20), // 500MB
+		loginProtection.GinMiddleware(),
+		pathLimiter.GinMiddleware(ratelimit.KeyFromJWTOrUserID(cfg.JWT.Secret)),
+	}
+	r := api.NewRouterWithOptions(s, cfg.Storage.UploadDir, cfg.JWT.Secret,
+		api.RouterOptions{
+			JWTTTL:       cfg.JWT.TTL,
+			AllowXUserID: cfg.Server.Mode != "release",
+			ReadyCheck:   readyCheck,
+			Middlewares:  middlewares,
+		},
+		likeSvc, feedSvc, recSvc, fanoutPub, transcodePub)
 	r.GET("/metrics", func(c *gin.Context) { metrics.Handler().ServeHTTP(c.Writer, c.Request) })
 
 	srv := &http.Server{
@@ -263,14 +339,72 @@ func main() {
 
 // logFlag 格式化功能开关日志。
 func logFlag(enabled bool, name string) string {
-	if enabled { return name }
+	if enabled {
+		return name
+	}
 	return ""
+}
+
+func validateProductionConfig(cfg *config.Config) error {
+	if cfg.Server.Mode != "release" {
+		return nil
+	}
+	if cfg.JWT.Secret == "" || cfg.JWT.Secret == "dev-secret-change-in-production" ||
+		cfg.JWT.Secret == "change-me-in-production" || cfg.JWT.Secret == "prod-change-me" ||
+		len(cfg.JWT.Secret) < 32 {
+		return errors.New("release 模式必须配置长度至少 32 位的 JWT_SECRET")
+	}
+	if cfg.Features.Seed {
+		return errors.New("release 模式禁止启用演示数据 seed")
+	}
+	if !cfg.MysqlEnabled() {
+		return errors.New("release 模式必须配置 MYSQL_DSN，不能使用内存 Store")
+	}
+	if !cfg.RedisEnabled() {
+		return errors.New("release 模式必须配置 REDIS_ADDR，不能使用内存点赞/Feed")
+	}
+	if !cfg.Features.MQEnabled {
+		return errors.New("release 模式必须启用 MQ，保证异步任务可靠消费")
+	}
+	if cfg.MQ.Type == "chan" {
+		return errors.New("release 模式禁止使用进程内 ChanBus，请配置持久化 MQ 后再启用 mq_enabled")
+	}
+	if !cfg.OSSEnabled() || cfg.OSS.AccessKey == "" || cfg.OSS.SecretKey == "" || cfg.OSS.Bucket == "" {
+		return errors.New("release 模式必须配置 OSS，不能依赖本地静态视频存储")
+	}
+	return nil
+}
+
+func newReadyChecker(db *sql.DB, rdb redis.UniversalClient, mqEnabled bool, mqType string, ossClient *oss.Client, requireOSS bool) func(context.Context) error {
+	return func(ctx context.Context) error {
+		var errs []error
+		if db != nil {
+			if err := db.PingContext(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("mysql: %w", err))
+			}
+		}
+		if rdb != nil {
+			if err := rdb.Ping(ctx).Err(); err != nil {
+				errs = append(errs, fmt.Errorf("redis: %w", err))
+			}
+		} else if mqEnabled && mqType == "redis_stream" {
+			errs = append(errs, errors.New("mq: redis_stream requires redis"))
+		}
+		if requireOSS {
+			if ossClient == nil {
+				errs = append(errs, errors.New("oss: client not initialized"))
+			} else if err := ossClient.Health(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("oss: %w", err))
+			}
+		}
+		return errors.Join(errs...)
+	}
 }
 
 // ---- 适配器 ----
 
 type busProducer struct {
-	bus   *mq.ChanBus
+	bus   mq.Producer
 	topic string
 }
 
@@ -280,11 +414,23 @@ func (p *busProducer) Publish(ctx context.Context, e like.LikeEvent) error {
 }
 
 type fanoutPublisher struct {
-	bus   *mq.ChanBus
-	topic string
+	bus       mq.Producer
+	topic     string
+	feedStore *feed.Store
 }
 
 func (p *fanoutPublisher) PublishFanout(authorID, videoID, tsMilli int64) {
+	if tsMilli <= 0 {
+		tsMilli = time.Now().UnixMilli()
+	}
+	if p.feedStore != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := p.feedStore.AppendToOutbox(ctx, authorID, videoID, time.UnixMilli(tsMilli)); err != nil {
+			log.Printf("feed outbox append failed: authorID=%d videoID=%d err=%v", authorID, videoID, err)
+			return
+		}
+	}
 	task := feed.FanoutTask{AuthorID: authorID, VideoID: videoID, TsMilli: tsMilli}
 	data, _ := json.Marshal(task)
 	if err := p.bus.Publish(context.Background(), p.topic, data); err != nil {
@@ -292,10 +438,12 @@ func (p *fanoutPublisher) PublishFanout(authorID, videoID, tsMilli int64) {
 	}
 }
 
-type transcodePublisherAdapter struct{ bus *mq.ChanBus }
+type transcodePublisherAdapter struct{ bus mq.Producer }
 
 func (p *transcodePublisherAdapter) PublishTranscode(videoID, authorID int64, sourcePath, filename string) {
-	if !media.Available() { return }
+	if !media.Available() {
+		return
+	}
 	task := transcode.Task{VideoID: videoID, AuthorID: authorID, SourcePath: sourcePath, Filename: filename}
 	data, _ := json.Marshal(task)
 	if err := p.bus.Publish(context.Background(), "transcode", data); err != nil {
@@ -348,23 +496,28 @@ func (p *recLikeProvider) BatchIsLiked(ctx context.Context, uid int64, vids []in
 type storeStatusUpdater struct{ s *store.Store }
 
 func (u *storeStatusUpdater) UpdateStatus(_ context.Context, videoID int64, status model.VideoStatus) error {
-	v, err := u.s.GetVideo(videoID)
-	if err != nil { return err }
-	v.Status = status
-	return nil
+	return u.s.UpdateVideoStatus(videoID, status)
 }
 
 func (u *storeStatusUpdater) UpdatePlayURLs(_ context.Context, videoID int64, coverURL string, playURLs map[string]string) error {
-	v, err := u.s.GetVideo(videoID)
-	if err != nil { return err }
-	if coverURL != "" { v.CoverURL = coverURL }
-	if url, ok := playURLs["360p"]; ok { v.PlayURL = url }
-	return nil
+	playURL := ""
+	if url, ok := playURLs["360p"]; ok {
+		playURL = url
+	} else {
+		for _, url := range playURLs {
+			playURL = url
+			break
+		}
+	}
+	return u.s.UpdateVideoPlaybackURLs(videoID, playURL, coverURL, playURLs)
 }
 
 // ---- 内存 Repo ----
 
-type likeRecord struct{ liked bool; updatedAt int64 }
+type likeRecord struct {
+	liked     bool
+	updatedAt int64
+}
 
 type memLikeRepo struct {
 	mu      sync.Mutex
@@ -386,7 +539,8 @@ func (r *memLikeRepo) UpsertLike(_ context.Context, uid, vid, ts int64, liked bo
 	if rec := r.records[key]; rec == nil {
 		r.records[key] = &likeRecord{liked: liked, updatedAt: ts}
 	} else if ts > rec.updatedAt {
-		rec.liked = liked; rec.updatedAt = ts
+		rec.liked = liked
+		rec.updatedAt = ts
 	}
 	return nil
 }
@@ -396,7 +550,9 @@ func (r *memLikeRepo) ApplyCountDeltas(_ context.Context, deltas map[int64]int64
 	defer r.mu.Unlock()
 	for vid, delta := range deltas {
 		r.stats[vid] += delta
-		if r.stats[vid] < 0 { r.stats[vid] = 0 }
+		if r.stats[vid] < 0 {
+			r.stats[vid] = 0
+		}
 	}
 	return nil
 }

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,19 +13,55 @@ import (
 	"shortvideo/internal/store"
 )
 
+type RouterOptions struct {
+	JWTTTL       time.Duration
+	AllowXUserID bool
+	ReadyCheck   func(context.Context) error
+	Middlewares  []gin.HandlerFunc
+}
+
 func NewRouter(s *store.Store, uploadDir, jwtSecret string, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher, transcodePub TranscodePublisher) *gin.Engine {
-	h := NewHandler(s, uploadDir, jwtSecret, likeSvc, feedSvc, recSvc, fanoutPub, transcodePub)
-	jwtAuth := auth.NewJWT(jwtSecret)
+	return NewRouterWithOptions(s, uploadDir, jwtSecret, RouterOptions{JWTTTL: 24 * time.Hour, AllowXUserID: true}, likeSvc, feedSvc, recSvc, fanoutPub, transcodePub)
+}
+
+func NewRouterWithOptions(s *store.Store, uploadDir, jwtSecret string, opts RouterOptions, likeSvc LikeService, feedSvc *feed.Service, recSvc *rec.Recommender, fanoutPub FanoutPublisher, transcodePub TranscodePublisher) *gin.Engine {
+	if opts.JWTTTL <= 0 {
+		opts.JWTTTL = 24 * time.Hour
+	}
+	h := NewHandlerWithOptions(s, uploadDir, jwtSecret, opts.JWTTTL, opts.AllowXUserID, likeSvc, feedSvc, recSvc, fanoutPub, transcodePub)
+	jwtAuth := auth.NewJWTWithOptions(jwtSecret, opts.JWTTTL, opts.AllowXUserID)
 	authMdw := jwtAuth.GinMiddleware()
 
 	r := gin.New()
-	r.Use(ginLogger(), gin.Recovery())
+	r.Use(gin.Recovery())
+	r.Use(func(c *gin.Context) {
+		c.Set("allow_x_user_id", opts.AllowXUserID)
+		c.Next()
+	})
+	if len(opts.Middlewares) > 0 {
+		r.Use(opts.Middlewares...)
+	}
 
 	// 公开（无需鉴权）
 	r.POST("/api/users", h.CreateUser)
 	r.POST("/api/login", h.Login)
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"code": 0, "msg": "ok", "data": gin.H{"status": "ok"}})
+	})
+	r.GET("/readyz", func(c *gin.Context) {
+		if opts.ReadyCheck != nil {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+			defer cancel()
+			if err := opts.ReadyCheck(ctx); err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"code": http.StatusServiceUnavailable,
+					"msg":  "not ready",
+					"data": gin.H{"status": "not_ready", "error": err.Error()},
+				})
+				return
+			}
+		}
+		c.JSON(200, gin.H{"code": 0, "msg": "ok", "data": gin.H{"status": "ready"}})
 	})
 
 	// 只读（可选鉴权）

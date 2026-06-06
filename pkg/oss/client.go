@@ -2,10 +2,12 @@
 package oss
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	aliyun "github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
@@ -14,6 +16,7 @@ import (
 type Client struct {
 	bucket    *aliyun.Bucket
 	localDir  string // fallback 本地目录
+	cdnDomain string
 }
 
 // Config OSS 配置。Endpoint/Key 为空时使用本地模式。
@@ -22,6 +25,7 @@ type Config struct {
 	AccessKeyID     string
 	AccessKeySecret string
 	BucketName      string
+	CDNDomain       string
 	LocalDir        string // fallback: 本地存储路径
 }
 
@@ -35,7 +39,7 @@ func New(cfg Config) (*Client, error) {
 		if err := os.MkdirAll(cfg.LocalDir, 0755); err != nil {
 			return nil, err
 		}
-		return &Client{localDir: cfg.LocalDir}, nil
+		return &Client{localDir: cfg.LocalDir, cdnDomain: cfg.CDNDomain}, nil
 	}
 	client, err := aliyun.New(cfg.Endpoint, cfg.AccessKeyID, cfg.AccessKeySecret)
 	if err != nil {
@@ -45,7 +49,7 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oss bucket: %w", err)
 	}
-	return &Client{bucket: bucket, localDir: cfg.LocalDir}, nil
+	return &Client{bucket: bucket, localDir: cfg.LocalDir, cdnDomain: cfg.CDNDomain}, nil
 }
 
 // PutObject 上传文件到 OSS（或复制到本地目录）。
@@ -82,11 +86,35 @@ func (c *Client) PutObjectFromReader(objectKey string, reader io.Reader) error {
 
 // ObjectURL 返回对象的公开访问 URL。
 func (c *Client) ObjectURL(objectKey string) string {
+	if c.cdnDomain != "" {
+		return strings.TrimRight(c.cdnDomain, "/") + "/" + strings.TrimLeft(objectKey, "/")
+	}
 	if c.bucket != nil {
 		// CDN 域名优先（可配置）
 		return fmt.Sprintf("https://%s.%s/%s", c.bucket.BucketName, c.bucket.Client.Config.Endpoint, objectKey)
 	}
 	return "/uploads/" + objectKey
+}
+
+// Health performs a lightweight readiness check.
+func (c *Client) Health(ctx context.Context) error {
+	if c.bucket != nil {
+		done := make(chan error, 1)
+		go func() {
+			_, err := c.bucket.ListObjects(aliyun.MaxKeys(1))
+			done <- err
+		}()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-done:
+			return err
+		}
+	}
+	if c.localDir == "" {
+		return fmt.Errorf("local storage dir is empty")
+	}
+	return os.MkdirAll(c.localDir, 0755)
 }
 
 // IsLocal 是否本地模式。

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/time/rate"
 )
 
@@ -134,6 +135,41 @@ func TestKeyFromUserIDGin(t *testing.T) {
 	c.Request.Header.Set("X-User-Id", "42")
 	key := KeyFromUserID(c)
 	if key != "uid:42" {
+		t.Fatalf("unexpected key: %s", key)
+	}
+}
+
+func TestKeyFromJWTOrUserID(t *testing.T) {
+	secret := "test-secret"
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"uid": float64(99),
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	tokenStr, err := token.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request.Header.Set("Authorization", "Bearer "+tokenStr)
+	key := KeyFromJWTOrUserID(secret)(c)
+	if key != "uid:99" {
+		t.Fatalf("unexpected key: %s", key)
+	}
+}
+
+func TestKeyFromJWTOrUserID_DisablesXUserIDFallback(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request.RemoteAddr = "10.0.0.1:1234"
+	c.Request.Header.Set("X-User-Id", "42")
+	c.Set("allow_x_user_id", false)
+
+	key := KeyFromJWTOrUserID("secret")(c)
+	if key != "ip:10.0.0.1" {
 		t.Fatalf("unexpected key: %s", key)
 	}
 }

@@ -33,6 +33,7 @@ func main() {
 
 	// 本地聚合器：每 100ms 批量刷 Redis（可按需调整 interval）
 	aggregator := like.NewCounterAggregator(rdb)
+	likeSvc.SetCounterWriter(aggregator)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

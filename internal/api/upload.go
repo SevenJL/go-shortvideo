@@ -31,6 +31,10 @@ func (h *Handler) Upload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "仅支持 mp4/mov/webm/m4v/avi/mkv 格式"})
 		return
 	}
+	if err := validateVideoMIME(file); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+		return
+	}
 
 	if err := os.MkdirAll(h.uploadDir, 0o755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "创建上传目录失败"})
@@ -76,6 +80,7 @@ func (h *Handler) Upload(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
 		return
 	}
+	_ = h.store.UpdateVideoPlaybackURLs(v.ID, playURL, coverURL, map[string]string{"original": playURL})
 
 	if h.fanoutPub != nil {
 		h.fanoutPub.PublishFanout(uid, v.ID, v.CreatedAt)
@@ -88,6 +93,7 @@ func (h *Handler) Upload(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{
 		"video_id":  v.ID,
 		"status":    v.Status,
+		"play_urls": gin.H{"original": playURL},
 		"play_url":  playURL,
 		"cover_url": coverURL,
 		"filename":  header.Filename,
@@ -104,4 +110,20 @@ func allowedVideoExt(ext string) bool {
 		return true
 	}
 	return false
+}
+
+func validateVideoMIME(file io.ReadSeeker) error {
+	buf := make([]byte, 512)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("读取文件头失败")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("读取文件失败")
+	}
+	mime := http.DetectContentType(buf[:n])
+	if strings.HasPrefix(mime, "video/") || mime == "application/octet-stream" {
+		return nil
+	}
+	return fmt.Errorf("文件内容不是有效视频")
 }

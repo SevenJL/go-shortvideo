@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shortvideo-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: shortvideo-server
+  template:
+    metadata:
+      labels:
+        app: shortvideo-server
+    spec:
+      containers:
+        - name: server
+          image: shortvideo:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: shortvideo-config
+            - secretRef:
+                name: shortvideo-secret
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
